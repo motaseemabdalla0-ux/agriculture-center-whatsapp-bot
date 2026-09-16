@@ -874,12 +874,23 @@ async function handleControlCommand(msg) {
           return;
         }
 
+        // أحيانًا الملف لسه ما اكتملتش مزامنته على سيرفرات واتساب لحظة وصول الرسالة، فمحاولة
+        // التحميل الفورية بتفشل بخطأ غامض (زي "r" من الكود الداخلي لواتساب ويب). بنجرب 3
+        // محاولات مع تأخير متزايد قبل ما نستسلم فعليًا - نفس فكرة sendWithRetry في safeFarmerSend
         let media;
-        try {
-          media = await msg.downloadMedia();
-        } catch (err) {
-          console.log(`⚠️ فشل تحميل الملف من واتساب: ${err.message}`);
-          await msg.reply("⚠️ تعذّر تحميل الملف من واتساب حاليًا. حاول تبعته تاني.");
+        let lastMediaErr;
+        for (let attempt = 1; attempt <= 3 && !media; attempt++) {
+          try {
+            media = await msg.downloadMedia();
+          } catch (err) {
+            lastMediaErr = err;
+            console.log(`⚠️ فشل تحميل الملف من واتساب (محاولة ${attempt}/3): ${err.message}`);
+            if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
+          }
+        }
+        if (!media) {
+          console.log(`⚠️ فشل تحميل الملف نهائيًا بعد 3 محاولات: ${lastMediaErr && lastMediaErr.message}`);
+          await msg.reply("⚠️ تعذّر تحميل الملف من واتساب حاليًا. حاول تبعته تاني بعد شوية.");
           return;
         }
         if (!media || !media.data) {
