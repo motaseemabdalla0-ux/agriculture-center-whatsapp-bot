@@ -1,0 +1,29 @@
+{
+  "name": "agriculture-center-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "شات بوت واتساب لمركز الزراعة - الهيئة الملكية لمحافظة العلا",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "broadcast": "node broadcast.js",
+    "send-now": "node -e \"require('fs').writeFileSync('SEND_NOW.txt','')\"",
+    "send-registration-status": "node -e \"require('fs').writeFileSync('SEND_REGISTRATION_STATUS.txt','')\"",
+    "send-card-pickup": "node -e \"require('fs').writeFileSync('SEND_CARD_PICKUP.txt','')\"",
+    "send-documents-request": "node -e \"require('fs').writeFileSync('SEND_DOCUMENTS_REQUEST.txt','')\"",
+    "send-registration-invitation": "node -e \"require('fs').writeFileSync('SEND_REGISTRATION_INVITATION.txt','')\"",
+    "send-draft-forms": "node -e \"require('fs').writeFileSync('SEND_DRAFT_FORMS.txt','')\"",
+    "send-custom-message": "node -e \"require('fs').writeFileSync('SEND_CUSTOM_MESSAGE.txt','')\"",
+    "update:check": "node updater/cli.js check",
+    "update:test": "node updater/cli.js test",
+    "update:apply": "node updater/cli.js apply",
+    "campaign-inbox": "node campaign-inbox/localServer.js"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0",
+    "xlsx": "^0.18.5"
+  },
+  "allowScripts": {
+    "puppeteer@24.38.0": true
+  }
+}
