@@ -892,6 +892,7 @@ async function handleControlCommand(msg) {
           console.log("🩺 [Diagnostic-Media] msg.id keys:", JSON.stringify(idKeys));
           console.log("🩺 [Diagnostic-Media] msg.id._serialized موجود:", !!(idObj && idObj._serialized));
           console.log("🩺 [Diagnostic-Media] msg.id.$1 موجود:", !!(idObj && idObj.$1));
+          console.log("🩺 [Diagnostic-Media] msg.id.$1 القيمة:", idObj && idObj.$1);
           console.log("🩺 [Diagnostic-Media] msg.id.id موجود:", !!(idObj && idObj.id));
           console.log("🩺 [Diagnostic-Media] msg.id.remote موجود:", !!(idObj && idObj.remote));
           console.log("🩺 [Diagnostic-Media] msg.type:", msg.type);
@@ -900,15 +901,21 @@ async function handleControlCommand(msg) {
           console.log(`🩺 [Diagnostic-Media] فشل تسجيل بيانات التشخيص: ${diagErr.message}`);
         }
 
-        // Workaround محدود ومشروط: بيتفعّل بس لو _serialized فعلًا مفقودة، وبيبني بديل من
-        // نفس الصيغة الموثّقة رسميًا لمكتبة whatsapp-web.js نفسها (fromMe_remote_id[_participant])
-        // - مش تخمين عشوائي - ده بالظبط شكل _serialized اللي المكتبة بتحسبه داخليًا وقت العادي.
-        // لو $1 موجودة كمان، بنسجّلها في اللوج للمقارنة بس من غير ما نعتمد عليها فعليًا (مفيش
-        // توثيق رسمي إنها البديل الصحيح - القرار ده يحتاج دليل حقيقي من اللوج الأول قبل الاعتماد)
-        if (msg.id && typeof msg.id === "object" && !msg.id._serialized && msg.id.id && msg.id.remote !== undefined) {
-          const reconstructed = `${msg.id.fromMe}_${msg.id.remote}_${msg.id.id}${msg.id.participant ? `_${msg.id.participant}` : ""}`;
-          console.log(`🩺 [Diagnostic-Media] _serialized مفقودة - جرّبنا نعيد بنائها من fromMe/remote/id: ${reconstructed}`);
-          msg.id._serialized = reconstructed;
+        // Workaround محدود ومشروط: بيتفعّل بس لو _serialized فعلًا مفقودة.
+        // الأولوية لـ$1 - الدليل من اللوج (msg.id keys: fromMe/remote/id/self/$1) بيوحي إنها
+        // بالفعل القيمة المحسوبة داخليًا لـ_serialized نفسها بس تحت اسم مختلف في هذا الإصدار من
+        // واتساب ويب (2.3000.1047749307) - مش قيمة عشوائية. لو $1 مش موجودة، بنرجع لإعادة البناء
+        // اليدوي من نفس الصيغة الموثّقة لمكتبة whatsapp-web.js (fromMe_remote_id[_participant])
+        // كخط دفاع تاني بس، وبنسجّل أي القيمتين استُخدمت فعليًا عشان نقارن نتيجة كل واحدة
+        if (msg.id && typeof msg.id === "object" && !msg.id._serialized) {
+          if (msg.id.$1) {
+            console.log(`🩺 [Diagnostic-Media] _serialized مفقودة - استخدمنا $1 مباشرة: ${msg.id.$1}`);
+            msg.id._serialized = msg.id.$1;
+          } else if (msg.id.id && msg.id.remote !== undefined) {
+            const reconstructed = `${msg.id.fromMe}_${msg.id.remote}_${msg.id.id}${msg.id.participant ? `_${msg.id.participant}` : ""}`;
+            console.log(`🩺 [Diagnostic-Media] _serialized و$1 مفقودين - جرّبنا نعيد بنائها من fromMe/remote/id: ${reconstructed}`);
+            msg.id._serialized = reconstructed;
+          }
         }
 
         // أحيانًا الملف لسه ما اكتملتش مزامنته على سيرفرات واتساب لحظة وصول الرسالة، فمحاولة
@@ -921,8 +928,22 @@ async function handleControlCommand(msg) {
             media = await msg.downloadMedia();
           } catch (err) {
             lastMediaErr = err;
-            console.log(`⚠️ فشل تحميل الملف من واتساب (محاولة ${attempt}/3): ${err.message}`);
-            console.log(`🩺 [Diagnostic-Media] Stack trace كامل:\n${err.stack || "(مفيش stack متاح)"}`);
+            // err ممكن ميكونش Error عادي (زي undefined أو كائن بسيط) - بنطبع كل حاجة ممكنة عنه
+            // بأمان من غير ما نفترض إنه Error حقيقي عنده .message/.stack
+            console.log(`⚠️ فشل تحميل الملف من واتساب (محاولة ${attempt}/3)`);
+            console.log(`🩺 [Diagnostic-Media] typeof err: ${typeof err}`);
+            console.log(`🩺 [Diagnostic-Media] err instanceof Error: ${err instanceof Error}`);
+            try {
+              console.log(`🩺 [Diagnostic-Media] String(err): ${String(err)}`);
+            } catch {
+              console.log("🩺 [Diagnostic-Media] String(err) فشل");
+            }
+            try {
+              console.log(`🩺 [Diagnostic-Media] JSON(err): ${JSON.stringify(err, Object.getOwnPropertyNames(err || {}))}`);
+            } catch {
+              console.log("🩺 [Diagnostic-Media] JSON(err) فشل (غالبًا Circular)");
+            }
+            console.log(`🩺 [Diagnostic-Media] err.stack:\n${(err && err.stack) || "(مفيش stack)"}`);
             if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
           }
         }
