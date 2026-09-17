@@ -874,81 +874,56 @@ async function handleControlCommand(msg) {
           return;
         }
 
-        // ===== Diagnostic آمن (بدون أي محتوى ملف أو بيانات حساسة) لتشخيص فشل downloadMedia =====
-        // بيطبع بنية msg.id فعليًا بدل التخمين - عشان نتأكد هل _serialized فعلًا مفقودة، وهل
-        // فيه مفتاح تاني (زي $1) ممكن يكون البديل الصحيح، قبل أي محاولة إصلاح
+        // ===== Diagnostic آمن (بدون أي محتوى ملف أو بيانات حساسة) =====
         try {
-          let wwebVersion = null;
-          try {
-            wwebVersion = await client.getWWebVersion();
-          } catch (vErr) {
-            wwebVersion = `تعذّر الجلب: ${vErr.message}`;
-          }
           const idObj = msg.id;
-          const idKeys = idObj && typeof idObj === "object" ? Object.keys(idObj) : [];
           console.log("🩺 [Diagnostic-Media] whatsapp-web.js version:", require("whatsapp-web.js/package.json").version);
-          console.log("🩺 [Diagnostic-Media] WWebVersion (من واتساب ويب نفسه):", wwebVersion);
-          console.log("🩺 [Diagnostic-Media] msg.from ينتهي بـ @lid:", String(msg.from || "").endsWith("@lid"));
-          console.log("🩺 [Diagnostic-Media] msg.id keys:", JSON.stringify(idKeys));
+          console.log("🩺 [Diagnostic-Media] msg.id.remote:", idObj && idObj.remote);
+          console.log("🩺 [Diagnostic-Media] msg.id.id:", idObj && idObj.id);
+          console.log("🩺 [Diagnostic-Media] msg.id.fromMe:", idObj && idObj.fromMe);
+          console.log("🩺 [Diagnostic-Media] msg.id.self:", idObj && idObj.self);
           console.log("🩺 [Diagnostic-Media] msg.id._serialized موجود:", !!(idObj && idObj._serialized));
-          console.log("🩺 [Diagnostic-Media] msg.id.$1 موجود:", !!(idObj && idObj.$1));
-          console.log("🩺 [Diagnostic-Media] msg.id.$1 القيمة:", idObj && idObj.$1);
-          console.log("🩺 [Diagnostic-Media] msg.id.id موجود:", !!(idObj && idObj.id));
-          console.log("🩺 [Diagnostic-Media] msg.id.remote موجود:", !!(idObj && idObj.remote));
-          console.log("🩺 [Diagnostic-Media] msg.type:", msg.type);
-          console.log("🩺 [Diagnostic-Media] msg.hasMedia:", msg.hasMedia);
+          console.log("🩺 [Diagnostic-Media] msg.type:", msg.type, "| msg.hasMedia:", msg.hasMedia);
         } catch (diagErr) {
           console.log(`🩺 [Diagnostic-Media] فشل تسجيل بيانات التشخيص: ${diagErr.message}`);
         }
 
-        // Workaround محدود ومشروط: بيتفعّل بس لو _serialized فعلًا مفقودة.
-        // الأولوية لـ$1 - الدليل من اللوج (msg.id keys: fromMe/remote/id/self/$1) بيوحي إنها
-        // بالفعل القيمة المحسوبة داخليًا لـ_serialized نفسها بس تحت اسم مختلف في هذا الإصدار من
-        // واتساب ويب (2.3000.1047749307) - مش قيمة عشوائية. لو $1 مش موجودة، بنرجع لإعادة البناء
-        // اليدوي من نفس الصيغة الموثّقة لمكتبة whatsapp-web.js (fromMe_remote_id[_participant])
-        // كخط دفاع تاني بس، وبنسجّل أي القيمتين استُخدمت فعليًا عشان نقارن نتيجة كل واحدة
-        if (msg.id && typeof msg.id === "object" && !msg.id._serialized) {
-          if (msg.id.$1) {
-            console.log(`🩺 [Diagnostic-Media] _serialized مفقودة - استخدمنا $1 مباشرة: ${msg.id.$1}`);
-            msg.id._serialized = msg.id.$1;
-          } else if (msg.id.id && msg.id.remote !== undefined) {
-            const reconstructed = `${msg.id.fromMe}_${msg.id.remote}_${msg.id.id}${msg.id.participant ? `_${msg.id.participant}` : ""}`;
-            console.log(`🩺 [Diagnostic-Media] _serialized و$1 مفقودين - جرّبنا نعيد بنائها من fromMe/remote/id: ${reconstructed}`);
-            msg.id._serialized = reconstructed;
-          }
+        // السبب الجذري الحقيقي (تأكد من قراءة كود المكتبة نفسها -
+        // node_modules/whatsapp-web.js/src/structures/Message.js:513-597):
+        // downloadMedia() بتبعت this.id._serialized لصفحة واتساب ويب وتنادي
+        // WAWebCollections.Msg.get(msgId) (وfallback على getMessagesById) عشان تلاقي الرسالة
+        // جوّه الـStore الداخلي بتاع الصفحة نفسها. لو الرسالة مش موجودة في الـStore ده وقت
+        // النداء (لأن المحادثة نفسها لسه ما اتحمّلتش/اتفتحتش جوّه واتساب ويب - سيناريو شائع
+        // لما البوت بيستقبل رسالة من محادثة معندوش بيانات محمّلة عنها بعد)، الدالة **بترجع
+        // undefined بصمت من غير ما ترمي أي Error خالص** (مش catch-able) - وده يفسّر بالظبط
+        // ليه err فضل undefined في كل تشخيصاتنا اللي فاتت: مفيش استثناء أصلًا يتلقط.
+        // الإصلاح الموثّق لهذا النمط بالذات: نجبر واتساب ويب يحمّل بيانات المحادثة أولًا
+        // عن طريق msg.getChat() (بتنادي client.getChatById() داخليًا) قبل downloadMedia() -
+        // مفيش تعديل على _serialized أو تخمين لصيغة ID تاني خالص.
+        try {
+          await msg.getChat();
+        } catch (chatErr) {
+          console.log(`🩺 [Diagnostic-Media] فشل تحميل بيانات المحادثة (getChat): ${chatErr.message}`);
         }
 
-        // أحيانًا الملف لسه ما اكتملتش مزامنته على سيرفرات واتساب لحظة وصول الرسالة، فمحاولة
-        // التحميل الفورية بتفشل بخطأ غامض (زي "r" من الكود الداخلي لواتساب ويب). بنجرب 3
-        // محاولات مع تأخير متزايد قبل ما نستسلم فعليًا - نفس فكرة sendWithRetry في safeFarmerSend
         let media;
         let lastMediaErr;
         for (let attempt = 1; attempt <= 3 && !media; attempt++) {
           try {
             media = await msg.downloadMedia();
+            if (!media) {
+              console.log(`⚠️ downloadMedia رجعت undefined (محاولة ${attempt}/3) - الرسالة لسه مش موجودة في Store واتساب ويب`);
+              if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
+            }
           } catch (err) {
             lastMediaErr = err;
-            // err ممكن ميكونش Error عادي (زي undefined أو كائن بسيط) - بنطبع كل حاجة ممكنة عنه
-            // بأمان من غير ما نفترض إنه Error حقيقي عنده .message/.stack
-            console.log(`⚠️ فشل تحميل الملف من واتساب (محاولة ${attempt}/3)`);
-            console.log(`🩺 [Diagnostic-Media] typeof err: ${typeof err}`);
-            console.log(`🩺 [Diagnostic-Media] err instanceof Error: ${err instanceof Error}`);
-            try {
-              console.log(`🩺 [Diagnostic-Media] String(err): ${String(err)}`);
-            } catch {
-              console.log("🩺 [Diagnostic-Media] String(err) فشل");
-            }
-            try {
-              console.log(`🩺 [Diagnostic-Media] JSON(err): ${JSON.stringify(err, Object.getOwnPropertyNames(err || {}))}`);
-            } catch {
-              console.log("🩺 [Diagnostic-Media] JSON(err) فشل (غالبًا Circular)");
-            }
+            console.log(`⚠️ downloadMedia رمت استثناء فعلي (محاولة ${attempt}/3): ${err && err.message}`);
             console.log(`🩺 [Diagnostic-Media] err.stack:\n${(err && err.stack) || "(مفيش stack)"}`);
             if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
           }
         }
         if (!media) {
-          console.log(`⚠️ فشل تحميل الملف نهائيًا بعد 3 محاولات: ${lastMediaErr && lastMediaErr.message}`);
+          console.log(`⚠️ فشل تحميل الملف نهائيًا بعد 3 محاولات (${lastMediaErr ? `استثناء: ${lastMediaErr.message}` : "رجعت undefined بدون استثناء"})`);
           await msg.reply("⚠️ تعذّر تحميل الملف من واتساب حاليًا. حاول تبعته تاني بعد شوية.");
           return;
         }
