@@ -36,6 +36,7 @@ const ticketStore = require("./lib/ticketStore");
 const sessionStore = require("./lib/sessionStore");
 const rateLimiter = require("./lib/rateLimiter");
 const { normalizeSaudiPhone } = require("./lib/phoneUtil");
+const farmerRegistry = require("./lib/farmerRegistry");
 const { version: BOT_VERSION } = require("./package.json");
 
 // أرقام "المحررين" المسموح لهم يستخدموا كل أوامر التحكم من رقمهم هم مباشرة (مش لازم يكونوا رسائلي)
@@ -648,6 +649,14 @@ async function processFarmerMessage(msg) {
   // بنسجّله عشان أمر "كل الارقام" يقدر يعرض اسم حتى المزارعين اللي كلّموا البوت من نفسهم
   const displayName = (msg._data && msg._data.notifyName) || "";
   logIncomingMessage(chatId, displayName);
+  // أي رسالة واردة فعلية من المزارع = FARMER_REPLIED في Communication Status - مبتلمسش
+  // Farmer State إطلاقًا (منفصلين تمامًا بالتصميم). لو اختار "التواصل مع موظف" لاحقًا في نفس
+  // الدالة، الحالة هتتحدّث لـHANDED_OFF بعد كده (آخر تحديث بيكسب، وده المطلوب بالظبط)
+  try {
+    farmerRegistry.recordReply(normalizeSaudiPhone(chatId));
+  } catch (regErr) {
+    console.log(`⚠️ فشل تحديث Farmer Registry (رد وارد): ${regErr.message}`);
+  }
   const session = getSession(chatId);
   let replied = false;
 
@@ -680,6 +689,11 @@ async function processFarmerMessage(msg) {
         replied = await safeReply(msg, handoffText);
         session.state = "HANDED_OFF";
         sessionStore.setHandedOff(chatId); // تخزين دائم - إعادة تشغيل البوت متلغيش التحويل
+        try {
+          farmerRegistry.recordHandoff(normalizeSaudiPhone(chatId));
+        } catch (regErr) {
+          console.log(`⚠️ فشل تحديث Farmer Registry (تحويل لموظف): ${regErr.message}`);
+        }
         logEvent("choice_2", chatId);
         notifyStaff(chatId, withinHours);
       } else if (text === "3") {
@@ -796,7 +810,7 @@ client.on("message", async (msg) => {
   // متعرف عليه كمحرر/مدير، بنسجّل تحذير واضح في اللوج فيه صيغة الرقم الفعلية - عشان لو حصلت
   // مشكلة زي دي تاني (خصوصًا مع أرقام بتوصل بصيغة @lid) نلاقي السبب فورًا من غير تخمين
   const CONTROL_COMMAND_PATTERN =
-    /^(احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
+    /^(احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
   if (CONTROL_COMMAND_PATTERN.test(text)) {
     console.log(`⚠️ رسالة شكلها أمر تحكم ("${text}") من رقم مش متعرف عليه كمحرر/مدير: ${chatId}`);
   }
@@ -1520,6 +1534,77 @@ async function handleControlCommand(msg) {
         );
       } catch (err) {
         await msg.reply(`⚠️ تعذّر قراءة حالة المزارع حاليًا: ${err.message}`);
+      }
+      return;
+    }
+
+    // "سجل 966555323315" أو "سجل أحمد عبدالله" - يعرض سجل المزارع الدائم (Farmer Registry):
+    // الاسم العربي الموثوق، Farmer State (بيتقرا من farmerState.js مباشرة وقت الطلب - مش
+    // نسخة مخزّنة هنا، عشان يفضل دايمًا مطابق للمصدر الحقيقي)، Communication Status، وباقي البيانات
+    const registryByPhoneMatch = toWesternDigits(text).match(/^سجل\s+(\d{8,15})$/i);
+    const registryByNameMatch = text.match(/^سجل\s+([^\d].+)$/);
+    if (registryByPhoneMatch || registryByNameMatch) {
+      try {
+        let entries = [];
+        if (registryByPhoneMatch) {
+          const phone = normalizeSaudiPhone(registryByPhoneMatch[1]);
+          const found = farmerRegistry.searchByPhone(phone);
+          if (found) entries = [found];
+        } else {
+          entries = farmerRegistry.searchByName(registryByNameMatch[1].trim());
+        }
+
+        if (entries.length === 0) {
+          await msg.reply("📭 مفيش سجل مطابق في Farmer Registry.");
+          return;
+        }
+        if (entries.length > 5) {
+          await msg.reply(`🔎 فيه ${entries.length} نتيجة مطابقة - حدد رقم الجوال بالظبط عشان تشوف التفاصيل.`);
+          return;
+        }
+
+        const lines = entries.map((entry) => {
+          const currentState = farmerState.getState(entry.phone).state;
+          return (
+            `👤 اسم المزارع: ${entry.nameArabic || "غير مسجّل"}\n` +
+            `📱 الجوال: ${entry.phone}\n` +
+            `📍 حالة المزارع: ${farmerRegistry.FARMER_STATE_AR[currentState] || currentState}\n` +
+            `💬 حالة التواصل: ${farmerRegistry.COMMUNICATION_STATUS_AR[entry.communicationStatus] || entry.communicationStatus}\n` +
+            `📝 سبب آخر تواصل: ${farmerRegistry.CONTACT_REASON_AR[entry.lastContactReason] || entry.lastContactReason || "-"}\n` +
+            `📡 مصدر آخر رسالة: ${farmerRegistry.MESSAGE_SOURCE_AR[entry.lastMessageSource] || entry.lastMessageSource || "-"}\n` +
+            `🕒 آخر تواصل: ${entry.lastContactAt || "-"}\n` +
+            `📊 إجمالي الرسائل الناجحة: ${entry.totalMessages || 0}`
+          );
+        });
+        await msg.reply(lines.join("\n\n---\n\n"));
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر قراءة السجل حاليًا: ${err.message}`);
+      }
+      return;
+    }
+
+    // "تواصل 966555323315" - يعرض سجل التواصل الكامل (Communication History) لمزارع معيّن،
+    // من غير محتوى حساس زيادة عن اللازم (تاريخ + مصدر + سبب + حالة الإرسال بس)
+    const historyMatch = toWesternDigits(text).match(/^تواصل\s+(\d{8,15})$/i);
+    if (historyMatch) {
+      try {
+        const phone = normalizeSaudiPhone(historyMatch[1]);
+        const entry = farmerRegistry.searchByPhone(phone);
+        if (!entry || !entry.communicationHistory || entry.communicationHistory.length === 0) {
+          await msg.reply("📭 مفيش سجل تواصل مسجّل لهذا الرقم.");
+          return;
+        }
+        const sorted = [...entry.communicationHistory].sort((a, b) => (a.date < b.date ? 1 : -1));
+        const lines = sorted
+          .slice(0, 20)
+          .map((h, i) => {
+            const dateOnly = (h.date || "").slice(0, 10).split("-").reverse().join("/");
+            const reasonAr = farmerRegistry.CONTACT_REASON_AR[h.reason] || h.reason || "-";
+            return `${i + 1}. ${dateOnly} — ${reasonAr} — ${h.status === "SENT" ? "تم الإرسال" : h.status}`;
+          });
+        await msg.reply(`📜 سجل التواصل - ${entry.nameArabic || phone}:\n\n${lines.join("\n")}`);
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر قراءة سجل التواصل حاليًا: ${err.message}`);
       }
       return;
     }

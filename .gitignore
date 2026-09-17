@@ -38,6 +38,8 @@ campaigns/
 .env.*
 farmer_state.json
 farmer_state.json.bak
+farmer_registry.json
+farmer_registry.json.bak
 send_fingerprints.json
 send_fingerprints.json.bak
 tickets.json

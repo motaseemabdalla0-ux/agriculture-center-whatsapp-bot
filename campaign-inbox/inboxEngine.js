@@ -5,6 +5,8 @@ const { buildCampaignRows, summarizeCampaignRows } = require("../lib/campaignBui
 const campaignStore = require("../lib/campaignStore");
 const { sendCampaignRows } = require("../lib/campaignRunner");
 const rateLimiter = require("../lib/rateLimiter");
+const farmerRegistry = require("../lib/farmerRegistry");
+const { templateUsesName } = require("../lib/arabicNameGuard");
 const inboxStore = require("./inboxStore");
 
 // حالات "متوقفة مؤقتًا بسبب حصة الحملات" - أي حملة فيها واحدة منهم لسه تعتبر شغالة منطقيًا،
@@ -77,14 +79,29 @@ async function receiveCampaign({ buffer, fileName, purpose, campaignType, messag
     return inboxStore.setStatus(meta.campaignId, "REJECTED", { rejectReason: "MISSING_MESSAGE" });
   }
 
-  const withMessage = parsed.rows.map((r) => ({
-    name: r.name,
-    phone: r.phone,
-    applicationId: r.request_number || undefined,
-    // القالب الجديد: رسالة كل صف كما هي حرفيًا (زي ما طُلب - مفيش رسالة موحّدة إجبارية).
-    // التوافق القديم: رسالة واحدة على مستوى الحملة، مع دعم {name} داخلها لكل صف
-    message: parsed.hasMessageColumn ? r.message : fillTemplate(message, r),
-  }));
+  // قاعدة أمان الاسم العربي: بنحدد لكل صف هل القالب المستخدم بيحتوي {name} أصلًا (على مستوى
+  // الحملة كلها للنمط القديم، أو داخل نص كل صف لنفسه للقالب الجديد لكل صف رسالته). لو بيستخدم
+  // الاسم، بنحل الاسم العربي الموثوق (السجل أولًا، وإلا الاسم نفسه لو عربي فعلًا) *قبل* أي
+  // fillTemplate - عشان الرسالة النهائية تحتوي الاسم العربي الصح مش الخام. ممنوع أي تعريب تلقائي.
+  const oldStyleUsesName = !parsed.hasMessageColumn && templateUsesName(message);
+  const withMessage = parsed.rows.map((r) => {
+    const usesNamePlaceholder = parsed.hasMessageColumn ? templateUsesName(r.message) : oldStyleUsesName;
+    let resolvedName = r.name;
+    if (usesNamePlaceholder) {
+      const trusted = farmerRegistry.resolveTrustedArabicName(r.phone, r.name);
+      if (trusted) resolvedName = trusted; // لو مفيش trusted، بنسيب resolvedName زي ما هي - campaignBuilder هيحظرها بوضوح (blocked_non_arabic_name)
+    }
+    const rowForTemplate = { ...r, name: resolvedName };
+    return {
+      name: resolvedName,
+      phone: r.phone,
+      applicationId: r.request_number || undefined,
+      // القالب الجديد: رسالة كل صف كما هي (مع دعم {name} لو موجودة فعليًا داخل نص الصف نفسه).
+      // التوافق القديم: رسالة واحدة على مستوى الحملة، مع دعم {name} داخلها لكل صف
+      message: parsed.hasMessageColumn ? fillTemplate(r.message, rowForTemplate) : fillTemplate(message, rowForTemplate),
+      usesNamePlaceholder,
+    };
+  });
 
   const built = buildCampaignRows(withMessage, purpose);
   if (built.rejected) {
