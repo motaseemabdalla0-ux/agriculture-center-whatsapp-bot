@@ -35,6 +35,7 @@ const farmerState = require("./lib/farmerState");
 const ticketStore = require("./lib/ticketStore");
 const sessionStore = require("./lib/sessionStore");
 const rateLimiter = require("./lib/rateLimiter");
+const safeJsonStore = require("./lib/safeJsonStore");
 const { normalizeSaudiPhone } = require("./lib/phoneUtil");
 const farmerRegistry = require("./lib/farmerRegistry");
 const { version: BOT_VERSION } = require("./package.json");
@@ -962,13 +963,14 @@ async function handleControlCommand(msg) {
         if (counts.valid === 0) {
           await msg.reply(
             `⚠️ مفيش أي صف صالح للإرسال في الملف.\n\n` +
-              `إجمالي المرفوع: ${counts.total}\n` +
-              `❌ جوال غير صحيح/اسم أو رسالة فاضية: ${invalidOrMissing}\n` +
-              `🔁 مكرر داخل الملف: ${counts.duplicate}\n` +
-              `📨 اتبعتله نفس الرسالة قبل كده: ${counts.already_received}\n` +
-              `🚫 طلب نشط: ${counts.excluded_active_application}\n` +
-              `🚫 بطاقة صادرة: ${counts.excluded_card_issued}\n` +
-              `🚫 بطاقة مُستلمة: ${counts.excluded_card_collected}`
+              `الإجمالي: ${counts.total}\n` +
+              `الأرقام غير الصحيحة: ${invalidOrMissing}\n` +
+              `المكرر: ${counts.duplicate}\n` +
+              `سبق التواصل معهم (لنفس الغرض): ${counts.blocked_previous_contact}\n` +
+              `لديهم طلب قائم: ${counts.excluded_active_application}\n` +
+              `لديهم بطاقة: ${counts.excluded_card_issued + counts.excluded_card_collected}\n` +
+              `سبق إرسال نفس الغرض/الرسالة: ${counts.already_received}\n` +
+              `يحتاج مراجعة: ${counts.blocked_review_required}`
           );
           return;
         }
@@ -982,16 +984,44 @@ async function handleControlCommand(msg) {
           rows: campaignRows,
         });
 
+        // Backfill فوري في Farmer Registry بمجرد قبول الصفوف - قبل أي إرسال فعلي (بند 3).
+        // Best-effort ومحوّط بـtry/catch لكل صف: فشل تسجيل صف واحد ممنوع يوقف رفع الحملة كلها
+        const CAMPAIGN_LABEL_AR = {
+          REGISTRATION: "حملة تسجيل",
+          DOCUMENTS: "حملة مستندات",
+          CARD: "حملة بطاقات",
+          GENERAL_NOTICE: "حملة إشعار عام",
+          SURVEY: "حملة استبيان",
+          EVALUATION: "حملة تقييم",
+        };
+        campaignRows.forEach((row) => {
+          if (!row.phone) return;
+          try {
+            farmerRegistry.backfillFromCampaignRow({
+              phone: row.phone,
+              nameArabic: row.name,
+              campaignId,
+              campaignPurpose: purpose,
+              campaignLabel: CAMPAIGN_LABEL_AR[purpose] || "حملة",
+            });
+          } catch (backfillErr) {
+            console.log(`⚠️ فشل Backfill لسجل المزارع ${row.phone} (${backfillErr.message}) - مش خطر، بيكمل باقي الحملة عادي`);
+          }
+        });
+
         await msg.reply(
           `📋 معاينة الحملة - المعرّف: *${campaignId}* (النوع: ${purpose})\n\n` +
-            `Total uploaded: ${counts.total}\n` +
-            `Invalid phones: ${invalidOrMissing}\n` +
-            `Duplicates in file: ${counts.duplicate}\n` +
-            `Active applications: ${counts.excluded_active_application}\n` +
-            `Card issued: ${counts.excluded_card_issued}\n` +
-            `Card collected: ${counts.excluded_card_collected}\n` +
-            `Already received same message: ${counts.already_received}\n` +
-            `Ready to send: ${counts.valid}\n\n` +
+            `الإجمالي: ${counts.total}\n` +
+            `الأرقام غير الصحيحة: ${invalidOrMissing}\n` +
+            `المكرر: ${counts.duplicate}\n` +
+            `سبق التواصل معهم (تنبيه، مش استبعاد): ${counts.any_previous_contact}\n` +
+            `لديهم طلب قائم: ${counts.excluded_active_application}\n` +
+            `لديهم بطاقة: ${counts.excluded_card_issued + counts.excluded_card_collected}\n` +
+            `سبق إرسال نفس الغرض: ${counts.blocked_previous_contact}\n` +
+            `سبق إرسال نفس الرسالة بالظبط: ${counts.already_received}\n` +
+            `يحتاج مراجعة: ${counts.blocked_review_required}\n` +
+            `غير مسجل على واتساب: يظهر وقت الإرسال الفعلي فقط\n` +
+            `المتبقي/جاهز للإرسال: ${counts.valid}\n\n` +
             `📝 عينة من أول رسالة (${firstValid.name || firstValid.phone}):\n"${sample}"\n\n` +
             `الملف ده لسه ما اتبعتش لحد دلوقتي. للبدء الفعلي في الإرسال، ابعت بالظبط:\nتأكيد ارسال ${campaignId}`
         );
@@ -1538,6 +1568,104 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // "حالة البوت" - أمر إداري قراءة فقط بالكامل (بند 6): مفيش أي كتابة أو تعديل حالة هنا، ومفيش
+    // استهلاك لحصة الحملات (50/ساعة و500/يوم) أبدًا - بس عرض حالة حالية
+    if (/^حالة\s*البوت$/i.test(text)) {
+      try {
+        const rlStatus = rateLimiter.getStatus();
+        const uptimeSec = Math.floor(process.uptime());
+        const uptimeStr = `${Math.floor(uptimeSec / 3600)} ساعة ${Math.floor((uptimeSec % 3600) / 60)} دقيقة`;
+        const knownStoreFiles = [
+          path.join(__dirname, "farmer_registry.json"),
+          path.join(__dirname, "farmer_state.json"),
+          path.join(__dirname, "send_fingerprints.json"),
+          path.join(__dirname, "sent_history.json"),
+          path.join(__dirname, "send_log.json"),
+          path.join(__dirname, "rate_limit_state.json"),
+        ];
+        const health = safeJsonStore.checkHealth(knownStoreFiles);
+        const lastEntry = sendLog.getLastEntry();
+
+        // إجمالي حالات الحملات عبر كل ملفات campaigns/*.json - قراءة فقط
+        const campaignsDir = path.join(__dirname, "campaigns");
+        let statusCounts = { sent: 0, pending: 0, failed: 0, not_on_whatsapp: 0, delivery_uncertain: 0, blocked_previous_contact: 0, blocked_review_required: 0 };
+        let activeCampaignLine = "لا توجد حملة نشطة حاليًا";
+        if (fs.existsSync(campaignsDir)) {
+          const files = fs.readdirSync(campaignsDir).filter((f) => f.endsWith(".json") && !f.includes(".before-reconcile"));
+          let latestCampaign = null;
+          files.forEach((f) => {
+            try {
+              const c = JSON.parse(fs.readFileSync(path.join(campaignsDir, f), "utf8"));
+              c.rows.forEach((r) => {
+                if (statusCounts[r.status] !== undefined) statusCounts[r.status]++;
+              });
+              if (!latestCampaign || new Date(c.createdAt) > new Date(latestCampaign.createdAt)) latestCampaign = c;
+            } catch {
+              // ملف تالف - نتجاهله في العرض بس (قراءة فقط، مفيش أي تعديل)
+            }
+          });
+          if (latestCampaign) {
+            const pendingLeft = latestCampaign.rows.filter((r) => r.status === "pending").length;
+            activeCampaignLine =
+              `آخر حملة: ${latestCampaign.id} (${latestCampaign.label || "-"})` +
+              (latestCampaign.pausedSafe
+                ? " - ⛔ PAUSED_SAFE (موعد الاستئناف: بعد موافقة صريحة يدويًا بس)"
+                : pendingLeft > 0
+                ? ` - ${pendingLeft} صف لسه pending`
+                : " - مكتملة");
+          }
+        }
+
+        await msg.reply(
+          `🤖 حالة البوت:\n\n` +
+            `🔌 اتصال واتساب: ${client.info ? "متصل ✅" : "غير متصل ❌"}\n` +
+            `⏱️ مدة التشغيل: ${uptimeStr}\n` +
+            `🔄 Portal Sync: ${portalSync && typeof portalSync.getLastSyncInfo === "function" ? JSON.stringify(portalSync.getLastSyncInfo()) : "غير متاح"}\n` +
+            `📢 ${activeCampaignLine}\n` +
+            `SENT: ${statusCounts.sent} | PENDING: ${statusCounts.pending} | FAILED: ${statusCounts.failed} | NOT_ON_WHATSAPP: ${statusCounts.not_on_whatsapp} | DELIVERY_UNCERTAIN: ${statusCounts.delivery_uncertain} | BLOCKED: ${statusCounts.blocked_previous_contact + statusCounts.blocked_review_required}\n\n` +
+            `📊 حصة الحملات: ${rlStatus.hourly.used}/${rlStatus.hourly.limit} في الساعة، ${rlStatus.daily.used}/${rlStatus.daily.limit} في اليوم${rlStatus.paused ? " (متوقفة مؤقتًا)" : ""}\n` +
+            `📨 آخر إرسال: ${lastEntry ? `${lastEntry.name || lastEntry.phone} - ${lastEntry.status} (${lastEntry.date} ${lastEntry.time})` : "لا يوجد"}\n\n` +
+            `💾 Persistence: ${health.healthy ? "HEALTHY ✅" : `FAILED ⚠️ (ملفات .tmp عالقة: ${health.orphanedTmp.join(", ")})`}`
+        );
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر قراءة حالة البوت حاليًا: ${err.message}`);
+      }
+      return;
+    }
+
+    // "حالة الحملة c1789640068672" - تفاصيل حملة "رسائل مخصصة" (campaignStore) معيّنة بمعرّفها،
+    // قراءة فقط، ومفيش استئناف تلقائي من هنا خالص حتى لو ظهرت pending
+    const campaignStatusMatch = text.match(/^حالة\s*الحملة\s+(\S+)$/i);
+    if (campaignStatusMatch) {
+      try {
+        const campaign = campaignStore.getCampaign(campaignStatusMatch[1]);
+        if (!campaign) {
+          await msg.reply("📭 مفيش حملة بهذا المعرّف.");
+          return;
+        }
+        const counts = {};
+        campaign.rows.forEach((r) => {
+          counts[r.status] = (counts[r.status] || 0) + 1;
+        });
+        const countsLine = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(" | ");
+        await msg.reply(
+          `📢 حالة الحملة ${campaign.id}:\n\n` +
+            `التسمية: ${campaign.label || "-"}\n` +
+            `تاريخ الإنشاء: ${campaign.createdAt}\n` +
+            `إجمالي الصفوف: ${campaign.rows.length}\n` +
+            `${countsLine}\n\n` +
+            `⛔ حالة الاستئناف: ${
+              campaign.pausedSafe
+                ? `PAUSED_SAFE (${campaign.pausedSafeReason || "-"}) - ممنوع الاستئناف لحد موافقة صريحة`
+                : "غير موقوفة PAUSED_SAFE (بس برضه الاستئناف يدوي بأمر تأكيد ارسال)"
+            }`
+        );
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر قراءة حالة الحملة حاليًا: ${err.message}`);
+      }
+      return;
+    }
+
     // "سجل 966555323315" أو "سجل أحمد عبدالله" - يعرض سجل المزارع الدائم (Farmer Registry):
     // الاسم العربي الموثوق، Farmer State (بيتقرا من farmerState.js مباشرة وقت الطلب - مش
     // نسخة مخزّنة هنا، عشان يفضل دايمًا مطابق للمصدر الحقيقي)، Communication Status، وباقي البيانات
@@ -1573,7 +1701,8 @@ async function handleControlCommand(msg) {
             `📝 سبب آخر تواصل: ${farmerRegistry.CONTACT_REASON_AR[entry.lastContactReason] || entry.lastContactReason || "-"}\n` +
             `📡 مصدر آخر رسالة: ${farmerRegistry.MESSAGE_SOURCE_AR[entry.lastMessageSource] || entry.lastMessageSource || "-"}\n` +
             `🕒 آخر تواصل: ${entry.lastContactAt || "-"}\n` +
-            `📊 إجمالي الرسائل الناجحة: ${entry.totalMessages || 0}`
+            `📊 إجمالي الرسائل الناجحة: ${entry.totalMessages || 0}\n` +
+            `📢 الحملة: ${entry.campaignLabel || "-"}${entry.campaignId ? ` (${entry.campaignId})` : ""}`
           );
         });
         await msg.reply(lines.join("\n\n---\n\n"));
