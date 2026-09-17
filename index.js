@@ -874,6 +874,43 @@ async function handleControlCommand(msg) {
           return;
         }
 
+        // ===== Diagnostic آمن (بدون أي محتوى ملف أو بيانات حساسة) لتشخيص فشل downloadMedia =====
+        // بيطبع بنية msg.id فعليًا بدل التخمين - عشان نتأكد هل _serialized فعلًا مفقودة، وهل
+        // فيه مفتاح تاني (زي $1) ممكن يكون البديل الصحيح، قبل أي محاولة إصلاح
+        try {
+          let wwebVersion = null;
+          try {
+            wwebVersion = await client.getWWebVersion();
+          } catch (vErr) {
+            wwebVersion = `تعذّر الجلب: ${vErr.message}`;
+          }
+          const idObj = msg.id;
+          const idKeys = idObj && typeof idObj === "object" ? Object.keys(idObj) : [];
+          console.log("🩺 [Diagnostic-Media] whatsapp-web.js version:", require("whatsapp-web.js/package.json").version);
+          console.log("🩺 [Diagnostic-Media] WWebVersion (من واتساب ويب نفسه):", wwebVersion);
+          console.log("🩺 [Diagnostic-Media] msg.from ينتهي بـ @lid:", String(msg.from || "").endsWith("@lid"));
+          console.log("🩺 [Diagnostic-Media] msg.id keys:", JSON.stringify(idKeys));
+          console.log("🩺 [Diagnostic-Media] msg.id._serialized موجود:", !!(idObj && idObj._serialized));
+          console.log("🩺 [Diagnostic-Media] msg.id.$1 موجود:", !!(idObj && idObj.$1));
+          console.log("🩺 [Diagnostic-Media] msg.id.id موجود:", !!(idObj && idObj.id));
+          console.log("🩺 [Diagnostic-Media] msg.id.remote موجود:", !!(idObj && idObj.remote));
+          console.log("🩺 [Diagnostic-Media] msg.type:", msg.type);
+          console.log("🩺 [Diagnostic-Media] msg.hasMedia:", msg.hasMedia);
+        } catch (diagErr) {
+          console.log(`🩺 [Diagnostic-Media] فشل تسجيل بيانات التشخيص: ${diagErr.message}`);
+        }
+
+        // Workaround محدود ومشروط: بيتفعّل بس لو _serialized فعلًا مفقودة، وبيبني بديل من
+        // نفس الصيغة الموثّقة رسميًا لمكتبة whatsapp-web.js نفسها (fromMe_remote_id[_participant])
+        // - مش تخمين عشوائي - ده بالظبط شكل _serialized اللي المكتبة بتحسبه داخليًا وقت العادي.
+        // لو $1 موجودة كمان، بنسجّلها في اللوج للمقارنة بس من غير ما نعتمد عليها فعليًا (مفيش
+        // توثيق رسمي إنها البديل الصحيح - القرار ده يحتاج دليل حقيقي من اللوج الأول قبل الاعتماد)
+        if (msg.id && typeof msg.id === "object" && !msg.id._serialized && msg.id.id && msg.id.remote !== undefined) {
+          const reconstructed = `${msg.id.fromMe}_${msg.id.remote}_${msg.id.id}${msg.id.participant ? `_${msg.id.participant}` : ""}`;
+          console.log(`🩺 [Diagnostic-Media] _serialized مفقودة - جرّبنا نعيد بنائها من fromMe/remote/id: ${reconstructed}`);
+          msg.id._serialized = reconstructed;
+        }
+
         // أحيانًا الملف لسه ما اكتملتش مزامنته على سيرفرات واتساب لحظة وصول الرسالة، فمحاولة
         // التحميل الفورية بتفشل بخطأ غامض (زي "r" من الكود الداخلي لواتساب ويب). بنجرب 3
         // محاولات مع تأخير متزايد قبل ما نستسلم فعليًا - نفس فكرة sendWithRetry في safeFarmerSend
@@ -885,6 +922,7 @@ async function handleControlCommand(msg) {
           } catch (err) {
             lastMediaErr = err;
             console.log(`⚠️ فشل تحميل الملف من واتساب (محاولة ${attempt}/3): ${err.message}`);
+            console.log(`🩺 [Diagnostic-Media] Stack trace كامل:\n${err.stack || "(مفيش stack متاح)"}`);
             if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
           }
         }
