@@ -901,24 +901,22 @@ async function handleControlCommand(msg) {
         // بدل _serialized مباشرة عند غيابها - نفس فكرة الـPR المفتوح، بس كـWrapper من عندنا.
         const { downloadMediaCompat } = require("./lib/downloadMediaCompat");
 
-        let media;
-        let lastMediaErr;
-        for (let attempt = 1; attempt <= 3 && !media; attempt++) {
-          try {
-            media = await downloadMediaCompat(client, msg);
-            if (!media) {
-              console.log(`⚠️ downloadMediaCompat رجعت undefined (محاولة ${attempt}/3)`);
-              if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
-            }
-          } catch (err) {
-            lastMediaErr = err;
-            console.log(`⚠️ downloadMediaCompat رمت استثناء (محاولة ${attempt}/3): ${err && err.message}`);
-            console.log(`🩺 [Diagnostic-Media] err.stack:\n${(err && err.stack) || "(مفيش stack)"}`);
-            if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
-          }
+        // محاولة واحدة بس أثناء التشخيص عمدًا (مفيش Retry) - الفشل هنا بنيوي (مشكلة LID
+        // Migration)، مش عارض مؤقت، فإعادة المحاولة 3 مرات كانت بس بتلخبط اللوج من غير فايدة
+        let media, mediaSource, remoteType, mediaErr;
+        try {
+          const result = await downloadMediaCompat(client, msg);
+          media = result.media;
+          mediaSource = result.source;
+          remoteType = result.remoteType;
+        } catch (err) {
+          mediaErr = err;
+          console.log(`⚠️ downloadMediaCompat رمت استثناء: ${err && err.message}`);
+          console.log(`🩺 [Diagnostic-Media] err.stack:\n${(err && err.stack) || "(مفيش stack)"}`);
         }
+        console.log(`🩺 [Diagnostic-Media] SERIALIZED_ID_SOURCE: ${mediaSource || "(none)"} | REMOTE_TYPE: ${remoteType || "(unknown)"}`);
         if (!media) {
-          console.log(`⚠️ فشل تحميل الملف نهائيًا بعد 3 محاولات (${lastMediaErr ? `استثناء: ${lastMediaErr.message}` : "رجعت undefined بدون استثناء"})`);
+          console.log(`⚠️ فشل تحميل الملف (${mediaErr ? `استثناء: ${mediaErr.message}` : "رجعت undefined بدون استثناء"})`);
           await msg.reply("⚠️ تعذّر تحميل الملف من واتساب حاليًا. حاول تبعته تاني بعد شوية.");
           return;
         }
