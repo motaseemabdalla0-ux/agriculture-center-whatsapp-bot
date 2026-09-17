@@ -888,36 +888,31 @@ async function handleControlCommand(msg) {
           console.log(`🩺 [Diagnostic-Media] فشل تسجيل بيانات التشخيص: ${diagErr.message}`);
         }
 
-        // السبب الجذري الحقيقي (تأكد من قراءة كود المكتبة نفسها -
-        // node_modules/whatsapp-web.js/src/structures/Message.js:513-597):
-        // downloadMedia() بتبعت this.id._serialized لصفحة واتساب ويب وتنادي
-        // WAWebCollections.Msg.get(msgId) (وfallback على getMessagesById) عشان تلاقي الرسالة
-        // جوّه الـStore الداخلي بتاع الصفحة نفسها. لو الرسالة مش موجودة في الـStore ده وقت
-        // النداء (لأن المحادثة نفسها لسه ما اتحمّلتش/اتفتحتش جوّه واتساب ويب - سيناريو شائع
-        // لما البوت بيستقبل رسالة من محادثة معندوش بيانات محمّلة عنها بعد)، الدالة **بترجع
-        // undefined بصمت من غير ما ترمي أي Error خالص** (مش catch-able) - وده يفسّر بالظبط
-        // ليه err فضل undefined في كل تشخيصاتنا اللي فاتت: مفيش استثناء أصلًا يتلقط.
-        // الإصلاح الموثّق لهذا النمط بالذات: نجبر واتساب ويب يحمّل بيانات المحادثة أولًا
-        // عن طريق msg.getChat() (بتنادي client.getChatById() داخليًا) قبل downloadMedia() -
-        // مفيش تعديل على _serialized أو تخمين لصيغة ID تاني خالص.
-        try {
-          await msg.getChat();
-        } catch (chatErr) {
-          console.log(`🩺 [Diagnostic-Media] فشل تحميل بيانات المحادثة (getChat): ${chatErr.message}`);
-        }
+        // السبب الجذري الحقيقي (مؤكد من Stack Trace فعلي + بحث في GitHub Issues الخاصة
+        // بمكتبة whatsapp-web.js): تحديث "LID Migration" من واتساب (منتصف يوليو 2026) خلّى
+        // واتساب ويب يعرض Serialized Message ID لرسائل محادثات @lid تحت اسم مختلف ($1) بدل
+        // الاسم القديم (_serialized) اللي نسخة المكتبة المنشورة (1.34.7 - أحدث نسخة npm متاحة،
+        // مفيش نسخة أحدث تحل المشكلة دي لحد الآن) لسه بتعتمد عليه. فيه Pull Request مفتوح غير
+        // مدموج على مستودع المكتبة بعنوان "$1 vs _serialized rename" بيعالج بالظبط نفس المشكلة.
+        // getChat() نفسها بترمي نفس الخطأ (r: r) لنفس السبب - المشكلة مش في downloadMedia() بس،
+        // هي في أي عملية بتحتاج تلاقي الرسالة/المحادثة جوّه Store واتساب ويب الداخلي باستخدام
+        // _serialized المفقودة. الحل: lib/downloadMediaCompat.js - Wrapper مستقل في مشروعنا
+        // (مش تعديل على node_modules، قابل للإزالة بسهولة لما المكتبة تتحدّث رسميًا) بيستخدم $1
+        // بدل _serialized مباشرة عند غيابها - نفس فكرة الـPR المفتوح، بس كـWrapper من عندنا.
+        const { downloadMediaCompat } = require("./lib/downloadMediaCompat");
 
         let media;
         let lastMediaErr;
         for (let attempt = 1; attempt <= 3 && !media; attempt++) {
           try {
-            media = await msg.downloadMedia();
+            media = await downloadMediaCompat(client, msg);
             if (!media) {
-              console.log(`⚠️ downloadMedia رجعت undefined (محاولة ${attempt}/3) - الرسالة لسه مش موجودة في Store واتساب ويب`);
+              console.log(`⚠️ downloadMediaCompat رجعت undefined (محاولة ${attempt}/3)`);
               if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
             }
           } catch (err) {
             lastMediaErr = err;
-            console.log(`⚠️ downloadMedia رمت استثناء فعلي (محاولة ${attempt}/3): ${err && err.message}`);
+            console.log(`⚠️ downloadMediaCompat رمت استثناء (محاولة ${attempt}/3): ${err && err.message}`);
             console.log(`🩺 [Diagnostic-Media] err.stack:\n${(err && err.stack) || "(مفيش stack)"}`);
             if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1500));
           }
