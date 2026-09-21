@@ -84,6 +84,28 @@ const before = hashAll();
   check("الأرقام العربية اتحوّلت", ready.some((c) => c.phone === "966507777777"));
   check("الاسم الإنجليزي محفوظ ومحسوب غير عربي", ready.some((c) => c.name === "Mohammed Ali") && preview.arabicNames === 2);
 }
+// 4ب) أرقام دولية (مسار Broadcast فقط)
+{
+  const rows = [
+    ["احمد فتحي", "+966 50 179 7538", "م"],
+    ["كريم", "+20 10 14993427", "م"],
+    ["محمود جمال", "+20 11 41684316", "م"],
+    ["بدون مقدمة", "01014993427", "م"], // محلي مصري من غير + : بيترفض (مفيش تخمين)
+    ["طويل", "+1234567890123456", "م"], // أكتر من 15 رقم
+    ["مكرر دولي", "0020 10 14993427", "م"], // نفس رقم كريم بصيغة 00
+  ];
+  const { ready, preview } = analyze(xlsxBuffer(rows));
+  check("الأرقام المصرية +20 اتقبلت بمقدمة صريحة", ready.some((c) => c.phone === "201014993427") && ready.some((c) => c.phone === "201141684316"));
+  check("الرقم السعودي بمسافات اتوحّد", ready.some((c) => c.phone === "966501797538"));
+  check("رقم دولي من غير + أو 00 مرفوض", !ready.some((c) => c.name === "بدون مقدمة"));
+  check("رقم أطول من E.164 مرفوض", !ready.some((c) => c.name === "طويل"));
+  check("نفس الرقم الدولي بصيغة 00 اتعدّ مكرر", preview.duplicates === 1);
+  check("Ready = 3 وinternationalNumbers = 2 وInvalid = 2", preview.ready === 3 && preview.internationalNumbers === 2 && preview.invalidPhones === 2);
+  const out = tmp();
+  const r = prepareBroadcast(xlsxBuffer(rows.slice(0, 3)), { outDir: out, pilot: 3 });
+  const vcf = fs.readFileSync(path.join(out, "broadcast_test_001.vcf"), "utf8");
+  check("Pilot بالثلاثة (سعودي + 2 مصري) وvCard فيه +20 و+966", r.lists[0].count === 3 && vcf.includes("TEL;TYPE=CELL:+201014993427") && vcf.includes("TEL;TYPE=CELL:+966501797538"));
+}
 // 5) Excel/vcf/manifest output
 {
   const out = tmp();
