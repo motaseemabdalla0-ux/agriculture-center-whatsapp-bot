@@ -62,3 +62,6 @@ registration_invitation.csv
 draft_forms.csv
 custom_message.csv
 *.csv.bak
+
+# تجهيز Broadcast الرسمي - بيانات مزارعين حقيقية
+broadcast_prep/
