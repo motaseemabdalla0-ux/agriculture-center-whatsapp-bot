@@ -719,31 +719,84 @@ async function processFarmerMessage(msg) {
         replied = await safeReply(msg, getCfgText("MAIN_MENU"));
       } else if (TICKET_CATEGORY_MAP[text]) {
         session.ticketCategory = TICKET_CATEGORY_MAP[text];
-        replied = await safeReply(msg, getCfgText("COMPLAINT_INTRO"));
-        session.state = "AWAITING_TICKET_TEXT";
+        replied = await safeReply(msg, "يرجى كتابة اسمكم الكامل:");
+        session.state = "AWAITING_TICKET_NAME";
       } else {
         replied = await safeReply(msg, "يرجى اختيار رقم صحيح:\n\n1. شكوى\n2. استفسار\n3. اقتراح\n4. الرجوع إلى القائمة الرئيسية");
       }
       break;
     }
 
+    // جمع البيانات المطلوبة على خطوات منفصلة (اسم -> جوال -> منطقة -> تفاصيل)، كل خطوة بيتحقق
+    // من رد فعلي مش تافه (رقم واحد أو حرف واحد) قبل ما يكمل للخطوة اللي بعدها - عشان مشكلة
+    // حقيقية حصلت فعلاً: مزارع بعت "1" بس فاتقبلت كأنها تفاصيل الشكوى كاملة وتقفلت التذكرة فورًا
+    case "AWAITING_TICKET_NAME": {
+      if (text.length < 2) {
+        replied = await safeReply(msg, "يرجى كتابة اسمكم الكامل (كتابة فعلية، مش رقم أو رمز):");
+        break;
+      }
+      session.ticketName = msg.body.trim();
+      replied = await safeReply(msg, "يرجى كتابة رقم جوالكم:");
+      session.state = "AWAITING_TICKET_PHONE";
+      break;
+    }
+
+    case "AWAITING_TICKET_PHONE": {
+      const digits = toWesternDigits(msg.body || "").replace(/[^\d]/g, "");
+      if (digits.length < 8) {
+        replied = await safeReply(msg, "رقم الجوال غير صحيح - يرجى كتابته مرة أخرى (مثال: 05xxxxxxxx):");
+        break;
+      }
+      session.ticketPhone = digits;
+      replied = await safeReply(msg, "يرجى كتابة المنطقة/المحافظة:");
+      session.state = "AWAITING_TICKET_REGION";
+      break;
+    }
+
+    case "AWAITING_TICKET_REGION": {
+      if (text.length < 2) {
+        replied = await safeReply(msg, "يرجى كتابة المنطقة/المحافظة (كتابة فعلية):");
+        break;
+      }
+      session.ticketRegion = msg.body.trim();
+      replied = await safeReply(msg, getCfgText("COMPLAINT_INTRO"));
+      session.state = "AWAITING_TICKET_TEXT";
+      break;
+    }
+
     case "AWAITING_TICKET_TEXT": {
-      // أي رسالة تعتبر تفاصيل الطلب المطلوبة - بتتحفظ كـTicket حقيقي بمعرّف مرجعي، بـCategory
-      // اترختار صراحةً في الخطوة اللي فاتت (مش استنتاج من نص الرسالة دي خالص)
+      // تحقق أدنى: التفاصيل لازم تكون كتابة فعلية مش رقم/رمز واحد قبل ما نقفل التذكرة
+      if (text.length < 5) {
+        replied = await safeReply(msg, "يرجى كتابة تفاصيل الطلب بشكل واضح (نص كامل، مش رقم أو رمز):");
+        break;
+      }
       logComplaint(chatId, msg.body); // نسيبها كمان كنسخة CSV بسيطة للتوافق مع أي استخدام قديم
       logEvent("complaint_submitted", chatId);
       const ticket = ticketStore.createTicket({
-        farmerName: displayName,
-        phone: chatId.replace(/@.*/, ""),
+        // الاسم والجوال المكتوبين فعليًا من المزارع لهم الأولوية - اسم بروفايل واتساب (displayName)
+        // احتياطي بس لو المزارع لأي سبب فضل الحقل فاضي (مش المفروض يحصل مع التحقق فوق)
+        farmerName: session.ticketName || displayName,
+        phone: session.ticketPhone || chatId.replace(/@.*/, ""),
+        region: session.ticketRegion || "",
         category: session.ticketCategory || "COMPLAINT",
         message: msg.body || "",
       });
+      // Communication Status: تسجيل إن المزارع ده فتح تذكرة فعليًا - منفصل تمامًا عن Farmer
+      // State Machine (Best-effort، فشله ميوقفش تأكيد التذكرة للمزارع)
+      try {
+        farmerRegistry.recordReply(normalizeSaudiPhone(chatId), "TICKET_RESPONSE");
+      } catch (regErr) {
+        console.log(`⚠️ فشل تحديث Farmer Registry (تذكرة جديدة): ${regErr.message}`);
+      }
       replied = await safeReply(
         msg,
         `${getCfgText("COMPLAINT_THANKS")}\n\n📋 رقم مرجعي: ${ticket.ticket_id}`
       );
       session.state = "MENU";
       delete session.ticketCategory;
+      delete session.ticketName;
+      delete session.ticketPhone;
+      delete session.ticketRegion;
       break;
     }
 
@@ -1746,7 +1799,11 @@ async function handleControlCommand(msg) {
         return;
       }
       const lines = [`🎫 التذاكر المفتوحة (${open.length}):\n`];
-      open.forEach((t) => lines.push(`• ${t.ticket_id} - ${t.farmer_name || t.phone} (${t.category}) - ${t.created_at}`));
+      open.forEach((t) =>
+        lines.push(
+          `• ${t.ticket_id} - ${t.farmer_name || "بدون اسم"} (${t.phone || "-"}${t.region ? " - " + t.region : ""}) - ${t.category} - ${t.created_at}`
+        )
+      );
       await msg.reply(lines.join("\n"));
       return;
     }
