@@ -792,9 +792,12 @@ async function processFarmerMessage(msg) {
     }
 
     case "AWAITING_TICKET_TEXT": {
-      // تحقق أدنى: التفاصيل لازم تكون كتابة فعلية مش رقم/رمز واحد قبل ما نقفل التذكرة
-      if (text.length < 5) {
-        replied = await safeReply(msg, "يرجى كتابة تفاصيل الطلب بشكل واضح (نص كامل، مش رقم أو رمز):");
+      // تحقق أدنى: التفاصيل لازم تكون جملة فعلية (كلمتين على الأقل + طول معقول) قبل ما نقفل
+      // التذكرة - حادثة حقيقية أثبتت إن كلمة واحدة قصيرة (زي "اقتراح" - نفس كلمة نوع الطلب!)
+      // كانت بتتقبل كتفاصيل كاملة وتتقفل التذكرة فورًا من غير أي شرح حقيقي من المزارع
+      const wordCount = msg.body.trim().split(/\s+/).filter(Boolean).length;
+      if (text.length < 10 || wordCount < 2) {
+        replied = await safeReply(msg, "يرجى كتابة تفاصيل الطلب بشكل كامل وواضح (جملة كاملة، مش كلمة واحدة):");
         break;
       }
       logComplaint(chatId, msg.body); // نسيبها كمان كنسخة CSV بسيطة للتوافق مع أي استخدام قديم
