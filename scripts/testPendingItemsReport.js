@@ -69,16 +69,22 @@ try {
     check("2د: كل نوع في قسمه (1 شكوى، 1 استفسار، 1 اقتراح)", data.ticketsByCategory.COMPLAINT.length === 1 && data.ticketsByCategory.INQUIRY.length === 1 && data.ticketsByCategory.SUGGESTION.length === 1);
     const text = formatPendingItemsReport(data);
     check("2هـ: النص فيه أقسام شكوى/استفسار/اقتراح منفصلة", text.includes("شكوى (") && text.includes("استفسار (") && text.includes("اقتراح ("));
+    check("2و: رقم التذكرة (سعودي صحيح) ظهر كرابط wa.me قابل للنقر", text.includes("https://wa.me/966501111111"));
   }
 
-  console.log("\n=== 3) محوّل لموظف ولسه ما اتقفلش ===");
+  console.log("\n=== 3) محوّل لموظف ولسه ما اتقفلش (رقم حقيقي + معرّف @lid خام) ===");
   {
     sessionStore.setHandedOff("966503333333@c.us");
+    sessionStore.setHandedOff("112979349631065@lid"); // معرّف @lid خام - مش رقم حقيقي
     const data = buildPendingItemsReport();
-    check("3: ظهر في القائمة", data.handedOff.length === 1 && data.handedOff[0].chatId === "966503333333@c.us");
+    check("3: الاتنين ظهروا في القائمة", data.handedOff.length === 2);
+    const text = formatPendingItemsReport(data);
+    check("3ب: الرقم الحقيقي ظهر كرابط wa.me", text.includes("https://wa.me/966503333333"));
+    check("3ج: معرّف الـ@lid الخام ظهر بتنبيه واضح مش كرابط", text.includes("112979349631065 (معرّف داخلي"));
     sessionStore.resumeBot("966503333333@c.us");
+    sessionStore.resumeBot("112979349631065@lid");
     const data2 = buildPendingItemsReport();
-    check("3ب: اختفى بعد resumeBot (اتقفل)", data2.handedOff.length === 0);
+    check("3د: اختفوا بعد resumeBot (اتقفلوا)", data2.handedOff.length === 0);
   }
 
   console.log("\n=== 4) مزارع بعت مستند ولسه محدش تفاعل معاه ===");
