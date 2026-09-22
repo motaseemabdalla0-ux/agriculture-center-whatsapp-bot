@@ -21,6 +21,7 @@ const {
   getKnownSenders,
   todayStr,
 } = require("./lib/activityLog");
+const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const adminStore = require("./lib/adminStore");
 const staffStore = require("./lib/staffStore");
 const textStore = require("./lib/textStore");
@@ -1282,6 +1283,18 @@ async function handleControlCommand(msg) {
     if (/^تقرير$/i.test(text)) {
       const summary = getDailySummary();
       await msg.reply(formatDailySummary(summary));
+      return;
+    }
+
+    // تذكير بكل الحالات المعلّقة اللي محتاجة متابعة بشرية - قراءة فقط، مفيش استهلاك لحصة
+    // الحملات ولا تغيير في أي حالة. أمر إداري (محرر/مدير بس) زي "تقرير" بالظبط
+    if (/^(المعلقات|رسائل\s*معلقة|المعلّقات)$/i.test(text)) {
+      try {
+        const data = buildPendingItemsReport();
+        await msg.reply(formatPendingItemsReport(data));
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر تجهيز تذكير المعلّقات حاليًا: ${err.message}`);
+      }
       return;
     }
 
