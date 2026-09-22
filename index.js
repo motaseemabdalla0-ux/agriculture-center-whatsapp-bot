@@ -750,70 +750,45 @@ async function processFarmerMessage(msg) {
         replied = await safeReply(msg, getCfgText("MAIN_MENU"));
       } else if (TICKET_CATEGORY_MAP[text]) {
         session.ticketCategory = TICKET_CATEGORY_MAP[text];
-        replied = await safeReply(msg, "يرجى كتابة اسمكم الكامل:");
-        session.state = "AWAITING_TICKET_NAME";
+        replied = await safeReply(msg, getCfgText("COMPLAINT_INTRO"));
+        session.state = "AWAITING_TICKET_TEXT";
       } else {
         replied = await safeReply(msg, "يرجى اختيار رقم صحيح:\n\n1. شكوى\n2. استفسار\n3. اقتراح\n4. الرجوع إلى القائمة الرئيسية");
       }
       break;
     }
 
-    // جمع البيانات المطلوبة على خطوات منفصلة (اسم -> جوال -> منطقة -> تفاصيل)، كل خطوة بيتحقق
-    // من رد فعلي مش تافه (رقم واحد أو حرف واحد) قبل ما يكمل للخطوة اللي بعدها - عشان مشكلة
-    // حقيقية حصلت فعلاً: مزارع بعت "1" بس فاتقبلت كأنها تفاصيل الشكوى كاملة وتقفلت التذكرة فورًا
-    case "AWAITING_TICKET_NAME": {
-      if (text.length < 2) {
-        replied = await safeReply(msg, "يرجى كتابة اسمكم الكامل (كتابة فعلية، مش رقم أو رمز):");
-        break;
-      }
-      session.ticketName = msg.body.trim();
-      replied = await safeReply(msg, "يرجى كتابة رقم جوالكم:");
-      session.state = "AWAITING_TICKET_PHONE";
-      break;
-    }
-
-    case "AWAITING_TICKET_PHONE": {
-      const digits = toWesternDigits(msg.body || "").replace(/[^\d]/g, "");
-      if (digits.length < 8) {
-        replied = await safeReply(msg, "رقم الجوال غير صحيح - يرجى كتابته مرة أخرى (مثال: 05xxxxxxxx):");
-        break;
-      }
-      session.ticketPhone = digits;
-      replied = await safeReply(msg, "يرجى كتابة المنطقة/المحافظة:");
-      session.state = "AWAITING_TICKET_REGION";
-      break;
-    }
-
-    case "AWAITING_TICKET_REGION": {
-      if (text.length < 2) {
-        replied = await safeReply(msg, "يرجى كتابة المنطقة/المحافظة (كتابة فعلية):");
-        break;
-      }
-      session.ticketRegion = msg.body.trim();
-      replied = await safeReply(msg, getCfgText("COMPLAINT_INTRO"));
-      session.state = "AWAITING_TICKET_TEXT";
-      break;
-    }
-
+    // رسالة واحدة بتحتوي على كل البيانات المطلوبة (اسم، جوال، منطقة، تفاصيل) - زي ما طُلب
+    // صراحةً بدل تجزئتها لخطوات منفصلة. التحقق هنا بيتأكد إن الرد فعلًا محتوى حقيقي شامل (طول
+    // معقول + فيه رقم جوال + أكتر من سطر/كلمة) قبل قبوله، عشان مشكلة حقيقية حصلت فعلاً قبل كده:
+    // كلمة واحدة قصيرة (زي "اقتراح" - نفس كلمة نوع الطلب!) كانت بتتقبل كرد كامل وتتقفل التذكرة
+    // فورًا من غير أي بيانات حقيقية. الاسم/الجوال/المنطقة بيتسحبوا من نص الرسالة نفسها best-effort،
+    // وبيرجعوا لاسم بروفايل واتساب/رقم المحادثة كاحتياط لو ما اتلقوش صريحين في النص
     case "AWAITING_TICKET_TEXT": {
-      // تحقق أدنى: التفاصيل لازم تكون جملة فعلية (كلمتين على الأقل + طول معقول) قبل ما نقفل
-      // التذكرة - حادثة حقيقية أثبتت إن كلمة واحدة قصيرة (زي "اقتراح" - نفس كلمة نوع الطلب!)
-      // كانت بتتقبل كتفاصيل كاملة وتتقفل التذكرة فورًا من غير أي شرح حقيقي من المزارع
-      const wordCount = msg.body.trim().split(/\s+/).filter(Boolean).length;
-      if (text.length < 10 || wordCount < 2) {
-        replied = await safeReply(msg, "يرجى كتابة تفاصيل الطلب بشكل كامل وواضح (جملة كاملة، مش كلمة واحدة):");
+      const body = msg.body || "";
+      const phoneMatch = toWesternDigits(body).match(/\d{8,15}/);
+      const wordCount = body.trim().split(/\s+/).filter(Boolean).length;
+      if (text.length < 20 || wordCount < 5 || !phoneMatch) {
+        replied = await safeReply(
+          msg,
+          "يرجى كتابة كل البيانات المطلوبة في رسالة واحدة كاملة (الاسم، رقم الجوال، المنطقة، ونوع وتفاصيل الطلب) - الرسالة الحالية غير كافية:"
+        );
         break;
       }
-      logComplaint(chatId, msg.body); // نسيبها كمان كنسخة CSV بسيطة للتوافق مع أي استخدام قديم
+
+      const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      // الاسم: أول سطر ما فيهوش أرقام (غالبًا ده اللي المزارع كتب فيه اسمه) - احتياط اسم البروفايل
+      const nameLine = lines.find((l) => !/\d/.test(l));
+      const resolvedPhone = phoneMatch[0];
+      const resolvedName = nameLine || displayName || "";
+
+      logComplaint(chatId, body); // نسيبها كمان كنسخة CSV بسيطة للتوافق مع أي استخدام قديم
       logEvent("complaint_submitted", chatId);
       const ticket = ticketStore.createTicket({
-        // الاسم والجوال المكتوبين فعليًا من المزارع لهم الأولوية - اسم بروفايل واتساب (displayName)
-        // احتياطي بس لو المزارع لأي سبب فضل الحقل فاضي (مش المفروض يحصل مع التحقق فوق)
-        farmerName: session.ticketName || displayName,
-        phone: session.ticketPhone || chatId.replace(/@.*/, ""),
-        region: session.ticketRegion || "",
+        farmerName: resolvedName,
+        phone: resolvedPhone || chatId.replace(/@.*/, ""),
         category: session.ticketCategory || "COMPLAINT",
-        message: msg.body || "",
+        message: body,
       });
       // Communication Status: تسجيل إن المزارع ده فتح تذكرة فعليًا - منفصل تمامًا عن Farmer
       // State Machine (Best-effort، فشله ميوقفش تأكيد التذكرة للمزارع)
@@ -828,9 +803,6 @@ async function processFarmerMessage(msg) {
       );
       session.state = "MENU";
       delete session.ticketCategory;
-      delete session.ticketName;
-      delete session.ticketPhone;
-      delete session.ticketRegion;
       break;
     }
 
