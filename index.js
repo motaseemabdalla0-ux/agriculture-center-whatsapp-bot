@@ -625,11 +625,7 @@ async function maybeSendPendingItemsReminder() {
 
   try {
     const data = buildPendingItemsReport();
-    const totalPending =
-      Object.values(data.byCategory).reduce((sum, list) => sum + list.length, 0) +
-      data.handedOff.length +
-      data.notReplied.length +
-      data.draftFarmers.length;
+    const totalPending = data.handedOff.length + data.pendingDocuments.length + data.openTickets.length;
     if (totalPending === 0) return;
 
     const selfChatId = client.info.wid._serialized;
@@ -685,6 +681,14 @@ async function processFarmerMessage(msg) {
   } catch (regErr) {
     console.log(`⚠️ فشل تحديث Farmer Registry (رد وارد): ${regErr.message}`);
   }
+
+  // مزارع بعت ملف/صورة مباشرة (زي صك الأرض أو مستند إثبات) من غير ما يكون في مسار تذكرة رسمي -
+  // بنسجّل الحدث ده بس عشان أمر "المعلقات" يقدر يوري "مزارعين أرسلوا مستندات ولم يتم الرد" لحد
+  // ما حد يتفاعل مع نفس الرقم بعدها (تذكرة/تحويل لموظف/رد يدوي - أي حدث تاني بيتسجّل بعده)
+  if (msg.hasMedia) {
+    logEvent("document_received", chatId);
+  }
+
   const session = getSession(chatId);
   let replied = false;
 
