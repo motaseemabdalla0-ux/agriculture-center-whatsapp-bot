@@ -55,7 +55,7 @@ try {
     check("1ب: الرسالة تقول مفيش معلّقات", formatPendingItemsReport(data).includes("مفيش أي حالات معلّقة"));
   }
 
-  console.log("\n=== 2) تذكرة شكوى/اقتراح مفتوحة، والاستفسار مش ظاهر ===");
+  console.log("\n=== 2) تذاكر مفتوحة مقسّمة على الثلاثة (شكوى/استفسار/اقتراح) ===");
   {
     ticketStore.createTicket({ farmerName: "أحمد سالم", phone: "0501111111", region: "العلا", category: "COMPLAINT", message: "الأرض متضررة فعلًا" });
     ticketStore.createTicket({ farmerName: "سارة", phone: "0507777777", category: "SUGGESTION", message: "اقتراح لتحسين الخدمة" });
@@ -63,11 +63,12 @@ try {
     const closed = ticketStore.createTicket({ farmerName: "منيف", phone: "0508888888", category: "COMPLAINT", message: "تم حلها بالفعل" });
     ticketStore.updateTicket(closed.ticket_id, { status: "RESOLVED" });
     const data = buildPendingItemsReport();
-    check("2: شكوى + اقتراح المفتوحين ظهروا (2)", data.openTickets.length === 2);
-    check("2ب: الاستفسار (INQUIRY) ما ظهرش", !data.openTickets.some((t) => t.ticket_id === inquiry.ticket_id));
+    check("2: الثلاثة المفتوحين ظهروا (3)", data.openTickets.length === 3);
+    check("2ب: الاستفسار ظهر في قسمه الخاص", data.ticketsByCategory.INQUIRY.some((t) => t.ticket_id === inquiry.ticket_id));
     check("2ج: الشكوى المُغلقة (RESOLVED) ما ظهرتش", !data.openTickets.some((t) => t.ticket_id === closed.ticket_id));
+    check("2د: كل نوع في قسمه (1 شكوى، 1 استفسار، 1 اقتراح)", data.ticketsByCategory.COMPLAINT.length === 1 && data.ticketsByCategory.INQUIRY.length === 1 && data.ticketsByCategory.SUGGESTION.length === 1);
     const text = formatPendingItemsReport(data);
-    check("2د: النص فيه اسم المزارع ونوع الطلب بالعربي", text.includes("أحمد سالم") && text.includes("اقتراح"));
+    check("2هـ: النص فيه أقسام شكوى/استفسار/اقتراح منفصلة", text.includes("شكوى (") && text.includes("استفسار (") && text.includes("اقتراح ("));
   }
 
   console.log("\n=== 3) محوّل لموظف ولسه ما اتقفلش ===");
