@@ -1,3 +1,5 @@
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
 // اختبارات إصلاح حادثة EPERM/EBUSY (حملة c1789640068672) - بند 9 من طلب الإصلاح:
 // EPERM/EACCES/EBUSY + Retry، Concurrent Writes، Crash Recovery، WhatsApp نجح ثم Persistence
 // فشل (DELIVERY_UNCERTAIN)، عدم تكرار SENT، previous-contact blocking، Portal state blocking،

@@ -1,3 +1,5 @@
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
 // اختبارات القالب الموحّد لصندوق استقبال الحملات: اسم الشخص | رقم الهاتف | الرسالة
 // (رسالة كل صف مستقلة، مش رسالة واحدة إجبارية للحملة كلها) - 12 اختبار كما طُلب.
 // صفر رسائل واتساب حقيقية (Fake Client)، وصفر تعديل على safeFarmerSend/farmerState نفسهم.

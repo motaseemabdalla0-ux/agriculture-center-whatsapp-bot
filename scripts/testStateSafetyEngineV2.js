@@ -3,6 +3,10 @@
 // من غير إرسال فعلي. + Simulation كاملة لرحلة مزارع من UNKNOWN لحد CARD_COLLECTED.
 // من غير أي رسالة واتساب حقيقية - بيعمل نسخة احتياطية من ملفات البيانات الحقيقية ويرجّعها
 // زي ما كانت في الآخر (نجح أو فشل).
+// حدود Rate Limiter صريحة للاختبار، مستقلة عن القيم الافتراضية الحقيقية في lib/rateLimiter.js
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
+
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");

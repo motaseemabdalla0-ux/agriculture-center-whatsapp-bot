@@ -1,3 +1,5 @@
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
 // اختبارات نظام تحديث GitHub (updater/) وصندوق استقبال الحملات (campaign-inbox/) - 18 اختبار
 // كما طُلب. صفر رسائل واتساب حقيقية (Fake Client في كل مكان)، وصفر تعديل على منطق
 // safeFarmerSend/farmerState/Dedup/Campaign Rules نفسه - بس تنسيق حوله.

@@ -1,3 +1,5 @@
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
 // اختبارات المرحلة التالتة (إصلاحات قبل DRY RUN حقيقي):
 // A/B) Farmer State Fail-Closed (تلف الملف الأساسي + النسخة الاحتياطية معًا) → حظر كامل، صفر إرسال واتساب
 // C/D) DRY_RUN ماتستهلكش Rate Limit، وإرسال حقيقي بعدها لنفس الرسالة يعمل طبيعي

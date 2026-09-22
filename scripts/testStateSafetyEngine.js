@@ -3,6 +3,12 @@
 // من غير أي رسالة واتساب حقيقية - عميل وهمي بالكامل. بيعمل نسخة احتياطية من كل ملفات البيانات
 // الحقيقية قبل ما يبدأ، وبيرجّعها زي ما كانت في الآخر (نجح الاختبار أو فشل) - عشان بيانات
 // المشروع الحقيقية (send_log, sent_history, إلخ) متتأثرش خالص.
+// حدود Rate Limiter صريحة للاختبار، مستقلة عن القيم الافتراضية الحقيقية في lib/rateLimiter.js
+// (اللي ممكن تتغيّر لأسباب إنتاجية زي تخفيف حمل واتساب) - الاختبار محتاج حصة كبيرة كفاية عشان
+// يقدر يبعت عشرات الرسائل الوهمية من غير ما يوصل لـrate_limited من قواعد الإنتاج نفسها
+process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
+process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
+
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
