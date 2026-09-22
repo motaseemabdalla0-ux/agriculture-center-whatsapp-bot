@@ -624,7 +624,7 @@ async function maybeSendPendingItemsReminder() {
   lastPendingReminderAt = Date.now();
 
   try {
-    const data = buildPendingItemsReport();
+    const data = await buildPendingItemsReport(client);
     const totalPending = data.handedOff.length + data.pendingDocuments.length + data.openTickets.length;
     if (totalPending === 0) return;
 
@@ -1330,7 +1330,7 @@ async function handleControlCommand(msg) {
     // الحملات ولا تغيير في أي حالة. أمر إداري (محرر/مدير بس) زي "تقرير" بالظبط
     if (/^(المعلقات|رسائل\s*معلقة|المعلّقات)$/i.test(text)) {
       try {
-        const data = buildPendingItemsReport();
+        const data = await buildPendingItemsReport(client);
         await msg.reply(formatPendingItemsReport(data));
       } catch (err) {
         await msg.reply(`⚠️ تعذّر تجهيز تذكير المعلّقات حاليًا: ${err.message}`);
