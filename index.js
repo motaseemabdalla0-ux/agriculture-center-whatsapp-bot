@@ -180,6 +180,8 @@ function getAdminChatIds() {
 
 const REPORT_HOUR = 20; // الساعة اللي بيتبعت فيها التقرير اليومي تلقائيًا (بتوقيت الجهاز)
 let lastReportSentDate = null;
+const PENDING_REMINDER_INTERVAL_MS = 4 * 60 * 60 * 1000; // كل 4 ساعات - بطلب صريح من الإدارة
+let lastPendingReminderAt = 0;
 
 const TRIGGER_FILE = path.join(__dirname, "SEND_NOW.txt");
 const REGISTRATION_TRIGGER_FILE = path.join(__dirname, "SEND_REGISTRATION_STATUS.txt");
@@ -609,9 +611,33 @@ function watchForTriggers() {
     }
 
     await maybeSyncPortal();
+    await maybeSendPendingItemsReminder();
     // ملحوظة: التقرير التلقائي متوقف بطلب الإدارة - المديرين هم اللي بيطلبوه يدويًا بكتابة "تقرير"
     // (الدالة maybeSendDailyReport باقية تحت من غير استدعاء، لو حبينا نرجّعها تاني في المستقبل)
   }, 2000);
+}
+
+// تذكير تلقائي بالحالات المعلّقة لمحادثة "رسائلي" بس (رقم البوت نفسه) كل PENDING_REMINDER_INTERVAL_MS
+// - بطلب صريح من الإدارة. بيتبعت بس لو فيه حاجة معلّقة فعليًا (مفيش إزعاج برسالة فاضية كل مرة)
+async function maybeSendPendingItemsReminder() {
+  if (Date.now() - lastPendingReminderAt < PENDING_REMINDER_INTERVAL_MS) return;
+  lastPendingReminderAt = Date.now();
+
+  try {
+    const data = buildPendingItemsReport();
+    const totalPending =
+      Object.values(data.byCategory).reduce((sum, list) => sum + list.length, 0) +
+      data.handedOff.length +
+      data.notReplied.length +
+      data.draftFarmers.length;
+    if (totalPending === 0) return;
+
+    const selfChatId = client.info.wid._serialized;
+    await client.sendMessage(selfChatId, formatPendingItemsReport(data));
+    console.log(`🔔 اتبعت تذكير الحالات المعلّقة تلقائيًا لـ"رسائلي" (${totalPending} حالة معلّقة).`);
+  } catch (err) {
+    console.log(`⚠️ فشل إرسال تذكير المعلّقات التلقائي: ${err.message}`);
+  }
 }
 
 // بيبعت تقرير النشاط اليومي تلقائيًا لـ"رسائلي" + كل أرقام المديرين، مرة واحدة كل يوم الساعة REPORT_HOUR
