@@ -24,6 +24,7 @@ const {
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
+const sentEcho = require("./lib/sentEcho");
 const adminStore = require("./lib/adminStore");
 const staffStore = require("./lib/staffStore");
 const textStore = require("./lib/textStore");
@@ -234,6 +235,13 @@ const client = new Client({
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   },
 });
+
+// أي نص بيبعته البوت (رسائل حملات/ردود) بنفتكره شوية عشان نتجاهل صداه لو رجع كرسالة "واردة"
+const originalSendMessage = client.sendMessage.bind(client);
+client.sendMessage = async (to, content, options) => {
+  if (typeof content === "string") sentEcho.remember(content);
+  return originalSendMessage(to, content, options);
+};
 
 // حماية: بعض تحديثات واتساب ويب بتكسر مكتبة whatsapp-web.js مؤقتًا
 // (مشكلة معروفة وموثقة في المكتبة نفسها، مش في كودنا) وبتسبب كراش كامل للبوت.
@@ -905,6 +913,13 @@ client.on("message", async (msg) => {
   // كان بيحصل إن البوت يستقبل نص رسالته هو نفسه كأنه رسالة من المزارع، ما يطابقش أي خيار من القائمة،
   // فيرد عليه بالقائمة الرئيسية فورًا بعد ما يبعتله رسالة الحملة - من غير ما المزارع يكتب أي حاجة.
   if (msg.fromMe) return;
+
+  // صدى رسالة البوت نفسه (واتساب ويب بيبعتها كرسالة واردة fromMe=false) - ممنوع نعتبرها من مزارع
+  // ونردّ عليها بالقائمة الرئيسية (كانت بتظهر القائمة فورًا بعد رسالة الاستلام من غير ما المزارع يكتب)
+  if (sentEcho.isEcho(msg.body)) {
+    console.log(`↩️ [صدى] تجاهل رسالة واردة من ${msg.from} نصها مطابق لرسالة أرسلها البوت للتو.`);
+    return;
+  }
 
   // تجاهل رسائل المجموعات - البوت يرد على المحادثات الفردية فقط
   // (نتأكد من شكل الرقم مباشرة بدل msg.getChat() اللي بتفشل حاليًا
