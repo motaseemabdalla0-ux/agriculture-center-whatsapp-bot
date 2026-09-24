@@ -22,6 +22,8 @@ const {
   todayStr,
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
+const deliveryStore = require("./lib/deliveryStore");
+const deliveryFlow = require("./lib/deliveryFlow");
 const adminStore = require("./lib/adminStore");
 const staffStore = require("./lib/staffStore");
 const textStore = require("./lib/textStore");
@@ -37,7 +39,7 @@ const ticketStore = require("./lib/ticketStore");
 const sessionStore = require("./lib/sessionStore");
 const rateLimiter = require("./lib/rateLimiter");
 const safeJsonStore = require("./lib/safeJsonStore");
-const { normalizeSaudiPhone } = require("./lib/phoneUtil");
+const { normalizeSaudiPhone, isValidSaudiPhone } = require("./lib/phoneUtil");
 const farmerRegistry = require("./lib/farmerRegistry");
 const { version: BOT_VERSION } = require("./package.json");
 
@@ -377,6 +379,12 @@ async function sendCardPickupBroadcast() {
     logLabel: "استلام البطاقة",
     campaignType: "card_pickup",
     messageSource: "SYSTEM_NOTIFICATION",
+    // حالة انتظار رد "استلام/توصيل" بتتفعّل بس لو نص الرسالة المُرسلة فعلًا بيعرض خيار التوصيل
+    onSent: ({ phone, name }) => {
+      if (deliveryStore.templateOffersDelivery(getCfgText("CARD_PICKUP_TEMPLATE"))) {
+        deliveryStore.markAwaitingChoice(phone, name);
+      }
+    },
   });
 }
 
@@ -625,7 +633,7 @@ async function maybeSendPendingItemsReminder() {
 
   try {
     const data = await buildPendingItemsReport(client);
-    const totalPending = data.handedOff.length + data.pendingDocuments.length + data.openTickets.length;
+    const totalPending = data.handedOff.length + data.pendingDocuments.length + data.openTickets.length + data.openDeliveries.length;
     if (totalPending === 0) return;
 
     const selfChatId = client.info.wid._serialized;
@@ -662,6 +670,44 @@ async function maybeSendDailyReport() {
   console.log(`📊 اتبعت التقرير اليومي تلقائيًا (${today}).`);
 }
 
+// رقم جوال المزارع الحقيقي (966...) لمطابقته بحالة انتظار "استلام/توصيل" المحفوظة برقمه. المعرّف
+// الموحّد أحيانًا بيبقى @lid خام (مش رقم)، فبنجرب: المعرّف نفسه -> ذاكرة @lid السابقة ->
+// client.getContactLidAndPhone (بس لو فيه فعلًا مزارعين منتظرين، عشان منسألش واتساب من غير داعي)
+async function resolveFarmerPhone(msg, chatId) {
+  const direct = String(chatId || "").replace(/@.*/, "");
+  if (isValidSaudiPhone(direct)) return direct;
+  const cached = deliveryStore.lookupLid(msg.from);
+  if (cached) return cached;
+  if (!deliveryStore.hasAnyPending()) return null;
+  try {
+    const result = await boundedCall("lid-phone", () => client.getContactLidAndPhone([msg.from]));
+    const pn = result && result[0] && result[0].pn ? String(result[0].pn).replace(/@.*/, "") : "";
+    if (isValidSaudiPhone(pn)) {
+      deliveryStore.cacheLid(msg.from, pn);
+      return pn;
+    }
+  } catch (err) {
+    console.log(`⚠️ [توصيل] تعذّر ترجمة ${msg.from} لرقم جوال: ${err.message}`);
+  }
+  return null;
+}
+
+// تسجيل مجموعة توصيل: "ربط مجموعة الشمال|الجنوب|الوسط" بيتكتب جوّه المجموعة نفسها من مدير/محرر
+// (أو من رقم البوت نفسه). بيحفظ معرّف المجموعة عشان بيانات التوصيل تتبعت لها
+async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
+  const m = toWesternDigits((msg.body || "").trim()).match(/^ربط\s*مجموعة\s*(الشمال|الجنوب|الوسط)$/);
+  if (!m) return false;
+  if (!trusted) {
+    const allowed = [...editorStore.getEditors(), ...(cfg.ADMIN_NUMBERS || []), ...adminStore.getAdmins()];
+    const ok = allowed.some((n) => (n.includes("@") ? senderId === n : senderId === `${n}@c.us`));
+    if (!ok) return false;
+  }
+  const regionKey = deliveryStore.REGION_BY_WORD[m[1]];
+  deliveryStore.setGroup(regionKey, groupId);
+  await safeReply(msg, `✅ تم ربط هذه المجموعة بطلبات توصيل منطقة ${m[1]}.`);
+  return true;
+}
+
 // بيعالج رسالة مزارع واحدة فعليًا (آخر رسالة في أي مجموعة رسائل متتالية بعد ما تهدى - شوف الـdebounce تحت)
 async function processFarmerMessage(msg) {
   // بنستخدم المعرّف الموحّد (رقم الهاتف الحقيقي لو اتترجم من @lid) بدل msg.from الخام - عشان
@@ -695,9 +741,37 @@ async function processFarmerMessage(msg) {
   // إرسال 0 (أو "قائمة"/"menu") يرجع المستخدم للقائمة الرئيسية في أي وقت
   if (/^(0|قائمة|menu|القائمة)$/i.test(text)) {
     session.state = "MENU";
+    try {
+      const p = await resolveFarmerPhone(msg, chatId);
+      if (p) deliveryStore.clearPending(p);
+    } catch {
+      // مش مهم - مجرد تنظيف حالة انتظار لو كانت موجودة
+    }
     replied = await safeReply(msg, getCfgText("MAIN_MENU"));
     logReplyOutcome(chatId, replied);
     return;
+  }
+
+  // ردود "استلام/توصيل البطاقة": بس لو المزارع في القائمة الرئيسية (مش وسط تذكرة أو محوّل لموظف)
+  // وعنده حالة انتظار فعلية - "1"/"2" هنا مالهمش علاقة بخيارات القائمة الرئيسية
+  if (session.state === "MENU") {
+    try {
+      const farmerPhone = await resolveFarmerPhone(msg, chatId);
+      if (farmerPhone) {
+        const outcome = deliveryFlow.handleReply(farmerPhone, text, getCfgText);
+        if (outcome.handled) {
+          replied = await safeReply(msg, outcome.reply);
+          logReplyOutcome(chatId, replied);
+          if (outcome.request) {
+            const fwd = await deliveryFlow.forwardRequest(client, outcome.request);
+            if (!fwd.ok) console.log(`⚠️ [توصيل] طلب ${outcome.request.id} ما اتبعتش لمجموعة المنطقة (${fwd.reason}) - محفوظ في "طلبات التوصيل".`);
+          }
+          return;
+        }
+      }
+    } catch (deliveryErr) {
+      console.log(`⚠️ [توصيل] خطأ في معالجة رد الاستلام/التوصيل: ${deliveryErr.message}`);
+    }
   }
 
   switch (session.state) {
@@ -835,7 +909,10 @@ client.on("message", async (msg) => {
   // تجاهل رسائل المجموعات - البوت يرد على المحادثات الفردية فقط
   // (نتأكد من شكل الرقم مباشرة بدل msg.getChat() اللي بتفشل حاليًا
   // بسبب نفس مشكلة تحديث واتساب ويب اللي كسرت إرسال الردود)
-  if (msg.from.endsWith("@g.us")) return;
+  if (msg.from.endsWith("@g.us")) {
+    await maybeRegisterDeliveryGroup(msg, msg.from, msg.author, false);
+    return;
+  }
 
   // تجاهل تمامًا أي حدث بمعرّف "status@broadcast" - ده مش رسالة من مزارع خالص، ده حدث داخلي
   // من ميزة "الحالة" (Status) في واتساب (لما جهة اتصال تشوف/تتفاعل مع حالة). من غير الفلتر ده،
@@ -1295,6 +1372,33 @@ async function handleControlCommand(msg) {
     if (/^تقرير$/i.test(text)) {
       const summary = getDailySummary();
       await msg.reply(formatDailySummary(summary));
+      return;
+    }
+
+    // أوامر توصيل البطاقة الإدارية (قراءة/تسجيل حالة فقط - مفيش إرسال لمزارعين)
+    if (/^مجموعات\s*التوصيل$/i.test(text)) {
+      const groups = deliveryStore.getGroups();
+      const lines = Object.values(deliveryStore.REGIONS).map((r) => `• ${r.ar}: ${groups[r.key] ? "مربوطة ✅" : "غير مربوطة ❌"}`);
+      await msg.reply(`🚚 مجموعات التوصيل:\n\n${lines.join("\n")}\n\nللربط: اكتب داخل المجموعة "ربط مجموعة الشمال" (أو الجنوب/الوسط).`);
+      return;
+    }
+    if (/^طلبات\s*التوصيل$/i.test(text)) {
+      const open = deliveryStore.listOpenRequests();
+      if (open.length === 0) {
+        await msg.reply("📭 مفيش طلبات توصيل مفتوحة.");
+        return;
+      }
+      const lines = open.map(
+        (r) =>
+          `• ${r.id} - ${r.name || "بدون اسم"} - ${deliveryStore.formatContact(r.phone)} - ${deliveryStore.REGION_BY_KEY[r.regionKey].ar}${r.forwarded ? "" : " ⚠️ لم يُرسل للمجموعة"}`
+      );
+      await msg.reply(`🚚 طلبات التوصيل المفتوحة (${open.length}):\n\n${lines.join("\n")}`);
+      return;
+    }
+    const deliveredMatch = text.match(/^تم\s*التوصيل\s+(D-\d+)$/i);
+    if (deliveredMatch) {
+      const done = deliveryStore.markDelivered(deliveredMatch[1]);
+      await msg.reply(done ? `✅ تم تسجيل توصيل الطلب ${done.id}.` : "⚠️ الطلب غير موجود أو تم تسجيله مسبقًا.");
       return;
     }
 
@@ -2055,6 +2159,11 @@ client.on("message_create", async (msg) => {
   // بيعتبر أي "to" بصيغة @lid = رسائلي (خطأ فادح: أي رسالة بيبعتها البوت لأي حد تاني معرّفه
   // بصيغة @lid كانت بتتفسّر غلط كأمر تحكم من "رسائلي"). دلوقتي بنتأكد فعليًا إن المستلم هو
   // البوت نفسه (contact.isMe) قبل ما نعتبرها محادثة رسائلي.
+  // رسالة من رقم البوت نفسه جوّه مجموعة (مالك الرقم بيربط مجموعة توصيل)
+  if (msg.to && msg.to.endsWith("@g.us")) {
+    await maybeRegisterDeliveryGroup(msg, msg.to, null, true);
+    return;
+  }
   if (!(await isTrueSelfChat(msg))) return;
 
   msg.isSelfChatCommand = true;

@@ -65,3 +65,5 @@ custom_message.csv
 
 # تجهيز Broadcast الرسمي - بيانات مزارعين حقيقية
 broadcast_prep/
+delivery_state.json
+delivery_state.json.bak

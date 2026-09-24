@@ -8,7 +8,7 @@ const path = require("path");
 const assert = require("assert");
 
 const ROOT = path.join(__dirname, "..");
-const DATA_FILES = ["tickets.json", "tickets.json.bak", "handoff_state.json", "handoff_state.json.bak", "activity_log.csv"];
+const DATA_FILES = ["tickets.json", "tickets.json.bak", "handoff_state.json", "handoff_state.json.bak", "activity_log.csv", "delivery_state.json", "delivery_state.json.bak"];
 
 function snapshot() {
   const s = {};
@@ -115,6 +115,18 @@ async function run() {
     logEvent("replied", "966504444444@c.us"); // تفاعل لاحق (رد/اختيار) يصلّح الحالة
     data = await buildPendingItemsReport();
     check("4ب: اختفى بعد أي حدث لاحق لنفس الرقم", !data.pendingDocuments.some((d) => d.phone === "966504444444@c.us"));
+  }
+
+  console.log("\n=== 4ج) طلبات توصيل البطاقة المفتوحة ===");
+  {
+    const deliveryStore = require("../lib/deliveryStore");
+    const r = deliveryStore.createRequest({ phone: "966505555555", name: "فهد", regionKey: "NORTH" });
+    let data = await buildPendingItemsReport();
+    const text = formatPendingItemsReport(data);
+    check("4ج: طلب التوصيل ظهر برابط wa.me والمنطقة وتنبيه عدم الإرسال للمجموعة", text.includes("https://wa.me/966505555555") && text.includes("الشمال") && text.includes("لم يُرسل للمجموعة"));
+    deliveryStore.markDelivered(r.id);
+    data = await buildPendingItemsReport();
+    check("4د: اختفى بعد تم التوصيل", data.openDeliveries.length === 0);
   }
 
   console.log("\n=== 5) صفر واتساب حقيقي (client.sendMessage مش موجود أصلًا في الكود) ===");
