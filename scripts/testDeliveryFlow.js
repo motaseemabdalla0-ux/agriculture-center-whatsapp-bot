@@ -37,6 +37,7 @@ const TEXTS = {
   DELIVERY_REMINDER_CHOICE: "REMIND_CHOICE",
   DELIVERY_REMINDER_REGION: "REMIND_REGION",
   DELIVERY_THANKS: "THANKS {region}",
+  DELIVERY_LOCATION_UNKNOWN: "LOCATION_UNKNOWN",
 };
 const getText = (k) => TEXTS[k];
 
@@ -117,6 +118,38 @@ async function run() {
   check("7: تم التوصيل بيقفل الطلب", done && done.status === "DELIVERED" && store.listOpenRequests().length === 0);
   store.cacheLid("999@lid", "966505555555");
   check("7ب: ذاكرة @lid", store.lookupLid("999@lid") === "966505555555");
+
+  console.log("\n=== 7ج) تحديد المنطقة تلقائيًا من الموقع (KMZ 14 منطقة زراعية -> 3 مناطق توصيل) ===");
+  {
+    // من غير حالة انتظار: مش مُعالَج
+    check("7ج: من غير حالة انتظار، الموقع مش مُعالَج", flow.handleLocation("966506666666", 26.6260, 37.9265, getText).handled === false);
+
+    // في خطوة CHOICE (لسه ما اختارش توصيل) - الموقع مش المفروض يتفعّل غير في خطوة REGION بالظبط
+    store.markAwaitingChoice("966506666666", "سالم");
+    check("7د: في خطوة CHOICE، الموقع مش مُعالَج (لسه محتاج يختار توصيل الأول)", flow.handleLocation("966506666666", 26.6260, 37.9265, getText).handled === false);
+
+    flow.handleReply("966506666666", "2", getText); // اختار توصيل -> بقى في خطوة REGION
+    // نقطة مركز "AlUla" الفعلية من ملف مناطق_مركز_الزراعة_العلا.kmz الرسمي -> المفروض تتصنّف "الشمال"
+    let r = flow.handleLocation("966506666666", 26.626, 37.9265, getText);
+    check("7هـ: موقع داخل منطقة AlUla -> اتصنّف الشمال تلقائيًا", r.handled && r.request && r.request.regionKey === "NORTH" && r.request.district === "AlUla" && r.request.autoDetected === true && r.reply === "THANKS الشمال");
+    check("7و: حالة الانتظار اتمسحت بعد التصنيف التلقائي", store.getPending("966506666666") === null);
+
+    // نقطة مركز "Al Ibriq" -> المفروض الجنوب
+    store.markAwaitingChoice("966507777777", "منى");
+    flow.handleReply("966507777777", "2", getText);
+    r = flow.handleLocation("966507777777", 25.7152, 38.6513, getText);
+    check("7ز: موقع داخل منطقة Al Ibriq -> اتصنّف الجنوب تلقائيًا", r.request && r.request.regionKey === "SOUTH" && r.request.district === "Al Ibriq");
+
+    // موقع برّه كل المناطق الـ14 المعروفة (زي وسط البحر الأحمر) -> ممنوع نخمّن، نطلب اختيار يدوي
+    store.markAwaitingChoice("966508888888", "فيصل");
+    flow.handleReply("966508888888", "2", getText);
+    r = flow.handleLocation("966508888888", 22.0, 39.0, getText);
+    check("7ح: موقع خارج كل المناطق المعروفة -> رسالة توضيحية بدون تخمين، وحالة الانتظار فاضلة", r.handled && !r.request && r.reply === "LOCATION_UNKNOWN" && store.getPending("966508888888").step === "REGION");
+
+    // نص رسالة المجموعة يوضّح إن المنطقة اتحددت تلقائيًا من الموقع
+    const groupText = flow.formatGroupMessage(store.listOpenRequests().find((x) => x.regionKey === "NORTH"));
+    check("7ط: نص المجموعة يوضّح 'محدَّدة تلقائيًا من الموقع' واسم المنطقة الفعلية (AlUla)", groupText.includes("محدَّدة تلقائيًا من الموقع") && groupText.includes("AlUla"));
+  }
 
   console.log("\n=== 8) Hook onSent في runPersonalizedBroadcast (نفس رسالة الاستلام + fake client) ===");
   const { runPersonalizedBroadcast } = require("../lib/personalizedRunner");

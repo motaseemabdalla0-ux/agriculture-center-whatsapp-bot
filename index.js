@@ -761,12 +761,16 @@ async function processFarmerMessage(msg) {
   }
 
   // ردود "استلام/توصيل البطاقة": بس لو المزارع في القائمة الرئيسية (مش وسط تذكرة أو محوّل لموظف)
-  // وعنده حالة انتظار فعلية - "1"/"2" هنا مالهمش علاقة بخيارات القائمة الرئيسية
+  // وعنده حالة انتظار فعلية - "1"/"2" هنا مالهمش علاقة بخيارات القائمة الرئيسية. لو المزارع بعت
+  // موقعه الفعلي (📎 ← الموقع) وهو في خطوة اختيار المنطقة، بنحدد المنطقة تلقائيًا من الإحداثيات
+  // بدل ما نطلب منه يختار رقم يدويًا (شوف lib/deliveryRegionsGeo.js)
   if (session.state === "MENU") {
     try {
       const farmerPhone = await resolveFarmerPhone(msg, chatId);
       if (farmerPhone) {
-        const outcome = deliveryFlow.handleReply(farmerPhone, text, getCfgText);
+        const outcome = msg.location
+          ? deliveryFlow.handleLocation(farmerPhone, msg.location.latitude, msg.location.longitude, getCfgText)
+          : deliveryFlow.handleReply(farmerPhone, text, getCfgText);
         if (outcome.handled) {
           replied = await safeReply(msg, outcome.reply);
           logReplyOutcome(chatId, replied);
