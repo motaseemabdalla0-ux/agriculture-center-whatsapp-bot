@@ -73,6 +73,14 @@ async function run() {
   check("4د: منطقة 2 = الجنوب، طلب اتسجّل", r.handled && r.request && r.request.regionKey === "SOUTH" && r.reply === "THANKS الجنوب" && r.request.name === "خالد");
   check("4هـ: حالة الانتظار اتمسحت بعد الطلب", store.getPending("966502222222") === null);
 
+  console.log("\n=== 4و) clearGroups بيشيل الربط الثلاثة كلهم دفعة واحدة (لأمر تفكيك مجموعات التوصيل) ===");
+  store.setGroup("NORTH", "999@g.us");
+  store.setGroup("SOUTH", "999@g.us");
+  store.setGroup("CENTER", "999@g.us");
+  check("4و: التلاتة مربوطين قبل التفكيك", Object.keys(store.getGroups()).length === 3);
+  store.clearGroups();
+  check("4ز: مفيش أي مجموعة مربوطة بعد clearGroups", Object.keys(store.getGroups()).length === 0);
+
   console.log("\n=== 5) توجيه الطلب لمجموعة المنطقة الصح فقط ===");
   store.setGroup("NORTH", "111@g.us");
   store.setGroup("SOUTH", "222@g.us");

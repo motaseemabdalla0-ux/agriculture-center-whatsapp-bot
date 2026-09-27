@@ -1390,6 +1390,52 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // البوت ينشئ مجموعات التوصيل الثلاث بنفسه ويربطها تلقائيًا - بدل الإنشاء اليدوي + "ربط مجموعة".
+    // الأعضاء: الموظفين المسجّلين حاليًا (اضف موظف ...) بالإضافة لرقم البوت نفسه (مُنشئ المجموعة).
+    // مفيش استبدال لمجموعات مربوطة بالفعل، تفاديًا لتكرار الإنشاء بالغلط - لازم "تفكيك مجموعات
+    // التوصيل" الأول لو حابب تعيد الإنشاء
+    if (/^انشاء\s*مجموعات\s*التوصيل$/i.test(text)) {
+      const existing = deliveryStore.getGroups();
+      const already = Object.values(deliveryStore.REGIONS).filter((r) => existing[r.key]);
+      if (already.length > 0) {
+        await msg.reply(
+          `⚠️ في مجموعات مربوطة بالفعل: ${already.map((r) => r.ar).join("، ")}.\n\nلو عايز تنشئ مجموعات جديدة، اكتب "تفكيك مجموعات التوصيل" الأول (هيشيل الربط بس، مش هيحذف المجموعات نفسها من واتساب).`
+        );
+        return;
+      }
+      const staff = staffStore.getStaff().map((n) => `${n}@c.us`);
+      if (staff.length === 0) {
+        await msg.reply('⚠️ مفيش موظفين مسجّلين حاليًا. ضيف موظف الأول بأمر "اضف موظف <رقم>" عشان يكون عضو في المجموعات.');
+        return;
+      }
+      await msg.reply(`⏳ جاري إنشاء 3 مجموعات توصيل (الشمال/الجنوب/الوسط) بعضوية ${staff.length} موظف...`);
+      const results = [];
+      for (const region of Object.values(deliveryStore.REGIONS)) {
+        try {
+          const result = await client.createGroup(`توصيل بطاقات - ${region.ar}`, staff);
+          if (typeof result === "string") {
+            results.push(`❌ ${region.ar}: فشل الإنشاء (${result})`);
+            continue;
+          }
+          deliveryStore.setGroup(region.key, result.gid._serialized);
+          const failed = Object.values(result.participants).filter((p) => p.statusCode !== 200).length;
+          results.push(`✅ ${region.ar}: اتربطت${failed > 0 ? ` (تعذّر إضافة ${failed} من الموظفين مباشرة - هيوصلهم دعوة)` : ""}`);
+        } catch (err) {
+          results.push(`❌ ${region.ar}: ${err.message}`);
+        }
+      }
+      await msg.reply(`🚚 نتيجة إنشاء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      return;
+    }
+
+    // إزالة الربط بس (مش حذف المجموعات الفعلية من واتساب) - عشان لو الإدارة حابة تنشئ مجموعات
+    // جديدة تاني بأمر "انشاء مجموعات التوصيل"
+    if (/^تفكيك\s*مجموعات\s*التوصيل$/i.test(text)) {
+      deliveryStore.clearGroups();
+      await msg.reply('✅ اتفكّك ربط الثلاث مجموعات. المجموعات نفسها لسه موجودة على واتساب - اكتب "انشاء مجموعات التوصيل" لإنشاء مجموعات جديدة، أو اربط مجموعات موجودة يدويًا بأمر "ربط مجموعة الشمال" داخلها.');
+      return;
+    }
+
     // أوامر توصيل البطاقة الإدارية (قراءة/تسجيل حالة فقط - مفيش إرسال لمزارعين)
     if (/^مجموعات\s*التوصيل$/i.test(text)) {
       const groups = deliveryStore.getGroups();
