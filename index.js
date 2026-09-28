@@ -1396,19 +1396,19 @@ async function handleControlCommand(msg) {
 
     // البوت ينشئ مجموعات التوصيل الثلاث بنفسه ويربطها تلقائيًا - بدل الإنشاء اليدوي + "ربط مجموعة".
     // الأعضاء: موظف/موظفي كل منطقة المخصّصين لها بأمر "اضف موظف توصيل" (لو مخصص حد لمنطقة)، وإلا
-    // بيرجع لقائمة موظفي خدمة المزارعين العامة (staffStore) كـfallback. مفيش استبدال لمجموعات
-    // مربوطة بالفعل، تفاديًا لتكرار الإنشاء بالغلط - لازم "تفكيك مجموعات التوصيل" الأول لو حابب تعيد الإنشاء
+    // بيرجع لقائمة موظفي خدمة المزارعين العامة (staffStore) كـfallback. بيتخطى أي منطقة مربوطة
+    // بالفعل (بدل الرفض الكامل) - عشان لو منطقة نجحت ومنطقة فشلت (مشكلة شبكة/واتساب مؤقتة)،
+    // تقدر تعيد المحاولة للناقص بس من غير ما تأثر على اللي اتربط. "تفكيك مجموعات التوصيل" لسه
+    // متاح لو حابب يبدأ من الصفر بالكامل
     if (/^انشاء\s*مجموعات\s*التوصيل$/i.test(text)) {
       const existing = deliveryStore.getGroups();
-      const already = Object.values(deliveryStore.REGIONS).filter((r) => existing[r.key]);
-      if (already.length > 0) {
-        await msg.reply(
-          `⚠️ في مجموعات مربوطة بالفعل: ${already.map((r) => r.ar).join("، ")}.\n\nلو عايز تنشئ مجموعات جديدة، اكتب "تفكيك مجموعات التوصيل" الأول (هيشيل الربط بس، مش هيحذف المجموعات نفسها من واتساب).`
-        );
+      const pendingRegions = Object.values(deliveryStore.REGIONS).filter((r) => !existing[r.key]);
+      if (pendingRegions.length === 0) {
+        await msg.reply('✅ الثلاث مناطق مربوطة بالفعل. لو عايز تنشئ مجموعات جديدة، اكتب "تفكيك مجموعات التوصيل" الأول.');
         return;
       }
       const fallbackStaff = staffStore.getStaff();
-      const regionsMissingStaff = Object.values(deliveryStore.REGIONS).filter(
+      const regionsMissingStaff = pendingRegions.filter(
         (r) => deliveryStore.getRegionStaff(r.key).length === 0 && fallbackStaff.length === 0
       );
       if (regionsMissingStaff.length > 0) {
@@ -1417,9 +1417,9 @@ async function handleControlCommand(msg) {
         );
         return;
       }
-      await msg.reply(`⏳ جاري إنشاء 3 مجموعات توصيل (الشمال/الجنوب/الوسط)، كل مجموعة بموظفها المخصّص...`);
+      await msg.reply(`⏳ جاري إنشاء مجموعات التوصيل الناقصة (${pendingRegions.map((r) => r.ar).join("، ")})...`);
       const results = [];
-      for (const region of Object.values(deliveryStore.REGIONS)) {
+      for (const region of pendingRegions) {
         const regionStaff = deliveryStore.getRegionStaff(region.key);
         const members = (regionStaff.length > 0 ? regionStaff : fallbackStaff).map((n) => `${n}@c.us`);
         try {
@@ -1435,7 +1435,12 @@ async function handleControlCommand(msg) {
           results.push(`❌ ${region.ar}: ${err.message}`);
         }
       }
-      await msg.reply(`🚚 نتيجة إنشاء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      const stillFailed = results.some((r) => r.startsWith("❌"));
+      await msg.reply(
+        `🚚 نتيجة إنشاء مجموعات التوصيل:\n\n${results.join("\n")}${
+          stillFailed ? '\n\nلو فيه منطقة فشلت، ممكن تحاول تاني بنفس الأمر بعد شوية (يتخطى اللي نجح فعلًا)، أو تنشئها يدويًا من واتساب وتربطها بأمر "ربط مجموعة الشمال/الجنوب/الوسط" داخلها.' : ""
+        }`
+      );
       return;
     }
 
