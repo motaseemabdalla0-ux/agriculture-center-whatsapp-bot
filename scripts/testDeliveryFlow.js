@@ -139,9 +139,10 @@ async function run() {
     flow.handleReply("966506666666", "2", getText); // اختار توصيل -> بقى في خطوة REGION
     // نقطة مركز "AlUla" الفعلية من ملف مناطق_مركز_الزراعة_العلا.kmz الرسمي -> المفروض تتصنّف "الشمال"
     let r = flow.handleLocation("966506666666", 26.626, 37.9265, getText);
-    check("7هـ: موقع داخل منطقة AlUla -> اتصنّف الشمال تلقائيًا، وينتقل لخطوة اليوم/الوقت", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966506666666").step === "DATETIME" && store.getPending("966506666666").regionKey === "NORTH" && store.getPending("966506666666").district === "AlUla" && store.getPending("966506666666").autoDetected === true);
+    check("7هـ: موقع داخل منطقة AlUla -> اتصنّف الشمال تلقائيًا، وينتقل لخطوة اليوم/الوقت", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966506666666").step === "DATETIME" && store.getPending("966506666666").regionKey === "NORTH" && store.getPending("966506666666").district === "AlUla" && store.getPending("966506666666").autoDetected === true && store.getPending("966506666666").latitude === 26.626);
     r = flow.handleReply("966506666666", "الاثنين صباحًا", getText);
-    check("7و: بعد كتابة الوقت، الطلب اتسجّل بالمنطقة التلقائية وحالة الانتظار اتمسحت", r.request && r.request.regionKey === "NORTH" && r.request.district === "AlUla" && r.request.autoDetected === true && r.request.preferredDateTime === "الاثنين صباحًا" && r.reply === "THANKS الشمال" && store.getPending("966506666666") === null);
+    check("7و: بعد كتابة الوقت، الطلب اتسجّل بالمنطقة التلقائية وحالة الانتظار اتمسحت والإحداثيات محفوظة", r.request && r.request.regionKey === "NORTH" && r.request.district === "AlUla" && r.request.autoDetected === true && r.request.preferredDateTime === "الاثنين صباحًا" && r.request.latitude === 26.626 && r.request.longitude === 37.9265 && r.reply === "THANKS الشمال" && store.getPending("966506666666") === null);
+    const alUlaRequest = r.request;
 
     // نقطة مركز "Al Ibriq" -> المفروض الجنوب
     store.markAwaitingChoice("966507777777", "منى");
@@ -159,6 +160,34 @@ async function run() {
     // نص رسالة المجموعة يوضّح إن المنطقة اتحددت تلقائيًا من الموقع
     const groupText = flow.formatGroupMessage(store.listOpenRequests().find((x) => x.regionKey === "NORTH"));
     check("7ط: نص المجموعة يوضّح 'محدَّدة تلقائيًا من الموقع' واسم المنطقة الفعلية (AlUla) والوقت المفضّل", groupText.includes("محدَّدة تلقائيًا من الموقع") && groupText.includes("AlUla") && groupText.includes("الاثنين صباحًا"));
+
+    // لما الطلب فيه إحداثيات فعلية (اتحدد من موقع، مش رقم منطقة يدوي)، forwardRequest المفروض
+    // يبعت رسالة نصية + pin موقع حقيقي كمان (Location) عشان فريق التوصيل يفتحه على الخريطة مباشرة
+    console.log("\n=== 7ي) forwardRequest بيبعت pin موقع حقيقي لو الطلب فيه إحداثيات ===");
+    store.setGroup("NORTH", "444@g.us");
+    const sentWithLocation = [];
+    const fwdWithLocation = await flow.forwardRequest(
+      { sendMessage: async (to, content) => { sentWithLocation.push({ to, content }); return true; } },
+      alUlaRequest
+    );
+    check(
+      "7ي: اتبعتت رسالتين لمجموعة الشمال - نص المجموعة + pin موقع بنفس الإحداثيات",
+      fwdWithLocation.ok &&
+        sentWithLocation.length === 2 &&
+        sentWithLocation.every((s) => s.to === "444@g.us") &&
+        typeof sentWithLocation[0].content === "string" &&
+        sentWithLocation[1].content.latitude === 26.626 &&
+        sentWithLocation[1].content.longitude === 37.9265
+    );
+
+    // طلب اتحدد برقم منطقة يدوي (مفيش إحداثيات) - forwardRequest يبعت النص بس، من غير pin موقع
+    console.log("\n=== 7ك) forwardRequest ما بيبعتش pin موقع لطلب اتحدد يدويًا (من غير إحداثيات) ===");
+    const sentNoLocation = [];
+    const fwdNoLocation = await flow.forwardRequest(
+      { sendMessage: async (to, content) => { sentNoLocation.push({ to, content }); return true; } },
+      r3.request // من قسم (5): منطقة اتحددت برقم يدوي "1"، مفيش latitude/longitude خالص
+    );
+    check("7ك: طلب يدوي (من غير إحداثيات) - رسالة واحدة بس (نص المجموعة)، من غير pin موقع", fwdNoLocation.ok && sentNoLocation.length === 1);
   }
 
   console.log("\n=== 8) Hook onSent في runPersonalizedBroadcast (نفس رسالة الاستلام + fake client) ===");
@@ -179,7 +208,8 @@ async function run() {
   const cfgSrc = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
   check("9: CARD_PICKUP_TEMPLATE الرسمي الجديد موجود بالكامل", cfgSrc.includes("يسرّنا إشعاركم بجاهزية بطاقة") && cfgSrc.includes("الاستلام المباشر: من مركز الزراعة بحي ساق"));
   const flowSrc = fs.readFileSync(path.join(ROOT, "lib", "deliveryFlow.js"), "utf8") + fs.readFileSync(path.join(ROOT, "lib", "deliveryStore.js"), "utf8");
-  check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage لمجموعة المنطقة", (flowSrc.match(/sendMessage/g) || []).length === 1);
+  // استدعاءين بس: نص رسالة المجموعة + pin الموقع (لو الطلب فيه إحداثيات) - الاتنين لمجموعة المنطقة بس
+  check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage (نص + pin موقع اختياري) لمجموعة المنطقة", (flowSrc.match(/sendMessage/g) || []).length === 2);
 
   console.log(`\n🎉 كل اختبارات حوار الاستلام/التوصيل نجحت (${passed} اختبار). صفر رسائل واتساب حقيقية.`);
 }
