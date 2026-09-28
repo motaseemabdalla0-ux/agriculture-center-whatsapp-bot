@@ -1420,10 +1420,21 @@ async function handleControlCommand(msg) {
       await msg.reply(`⏳ جاري إنشاء مجموعات التوصيل الناقصة (${pendingRegions.map((r) => r.ar).join("، ")})...`);
       const results = [];
       for (const region of pendingRegions) {
+        const groupName = `توصيل بطاقات - ${region.ar}`;
         const regionStaff = deliveryStore.getRegionStaff(region.key);
         const members = (regionStaff.length > 0 ? regionStaff : fallbackStaff).map((n) => `${n}@c.us`);
         try {
-          const result = await client.createGroup(`توصيل بطاقات - ${region.ar}`, members);
+          // مكتبة واتساب أحيانًا بترمي خطأ قراءة الرد (findImpl/unknown error) حتى لو المجموعة
+          // اتعملت فعليًا على السيرفر - قبل أي محاولة إنشاء جديدة، نتأكد الأول إن مفيش مجموعة
+          // بنفس الاسم اتعملت من محاولة سابقة فشلت في الرد بس (تفاديًا لتكرار الإنشاء)
+          const existingChats = await boundedCall(`chats-${region.key}`, () => client.getChats(), 15000);
+          const existingGroup = (existingChats || []).find((c) => c.isGroup && c.name === groupName);
+          if (existingGroup) {
+            deliveryStore.setGroup(region.key, existingGroup.id._serialized);
+            results.push(`✅ ${region.ar}: اتلاقت مجموعة موجودة بنفس الاسم من محاولة سابقة واتربطت (من غير إنشاء مجموعة جديدة)`);
+            continue;
+          }
+          const result = await client.createGroup(groupName, members);
           if (typeof result === "string") {
             results.push(`❌ ${region.ar}: فشل الإنشاء (${result})`);
             continue;
@@ -1432,7 +1443,7 @@ async function handleControlCommand(msg) {
           const failed = Object.values(result.participants).filter((p) => p.statusCode !== 200).length;
           results.push(`✅ ${region.ar}: اتربطت (${regionStaff.length > 0 ? "موظف مخصّص" : "موظف عام - fallback"})${failed > 0 ? ` - تعذّر إضافة ${failed} مباشرة، هيوصلهم دعوة` : ""}`);
         } catch (err) {
-          results.push(`❌ ${region.ar}: ${err.message}`);
+          results.push(`❌ ${region.ar}: ${err.message} - ⚠️ ممكن المجموعة اتعملت فعليًا رغم الخطأ، حاول تاني بنفس الأمر وهيكتشفها ويربطها بدل ما يكرر الإنشاء`);
         }
       }
       const stillFailed = results.some((r) => r.startsWith("❌"));
