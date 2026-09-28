@@ -704,7 +704,15 @@ async function resolveFarmerPhone(msg, chatId) {
 // (أو من رقم البوت نفسه). بيحفظ معرّف المجموعة عشان بيانات التوصيل تتبعت لها
 async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   const m = toWesternDigits((msg.body || "").trim()).match(/^ربط\s*مجموعة\s*(الشمال|الجنوب|الوسط)$/);
-  if (!m) return false;
+  if (!m) {
+    // تشخيص: أي رسالة جوّه مجموعة بتوصل هنا حتى لو مش أمر ربط - بنسجّلها بس لو شكلها قريبة من
+    // "ربط مجموعة" (تفاديًا لتلويث اللوج بكل دردشة عادية جوّه المجموعات)
+    if (/ربط/.test(msg.body || "")) {
+      console.log(`ℹ️ [ربط مجموعة] رسالة فيها "ربط" بس مطابقتش الصيغة المطلوبة بالظبط. النص: "${msg.body}"`);
+    }
+    return false;
+  }
+  console.log(`🔎 [ربط مجموعة] أمر "ربط مجموعة ${m[1]}" وصل من groupId=${groupId}, senderId=${senderId}, trusted=${trusted}`);
   if (!trusted) {
     const allowed = [...editorStore.getEditors(), ...(cfg.ADMIN_NUMBERS || []), ...adminStore.getAdmins()];
     let ok = allowed.some((n) => (n.includes("@") ? senderId === n : senderId === `${n}@c.us`));
@@ -721,10 +729,14 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
         console.log(`⚠️ [ربط مجموعة] تعذّر ترجمة معرّف @lid للمرسل: ${err.message}`);
       }
     }
-    if (!ok) return false;
+    if (!ok) {
+      console.log(`🚫 [ربط مجموعة] رُفض - المرسل (${senderId}) مش من ضمن المديرين/المحررين المسموح لهم (${allowed.join("، ") || "القائمة فاضية"}).`);
+      return false;
+    }
   }
   const regionKey = deliveryStore.REGION_BY_WORD[m[1]];
   deliveryStore.setGroup(regionKey, groupId);
+  console.log(`✅ [ربط مجموعة] تم ربط ${groupId} بمنطقة ${m[1]}.`);
   await safeReply(msg, `✅ تم ربط هذه المجموعة بطلبات توصيل منطقة ${m[1]}.`);
   return true;
 }
