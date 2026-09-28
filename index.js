@@ -707,7 +707,20 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   if (!m) return false;
   if (!trusted) {
     const allowed = [...editorStore.getEditors(), ...(cfg.ADMIN_NUMBERS || []), ...adminStore.getAdmins()];
-    const ok = allowed.some((n) => (n.includes("@") ? senderId === n : senderId === `${n}@c.us`));
+    let ok = allowed.some((n) => (n.includes("@") ? senderId === n : senderId === `${n}@c.us`));
+    // نفس مشكلة معرّف @lid المعروفة (شوف matchesPhoneList) - عضو المجموعة أحيانًا بيوصل معرّفه
+    // بصيغة @lid بدل @c.us، فحتى لو رقمه فعلًا مدير/محرر مسجّل، المقارنة المباشرة كانت بتفشل بصمت
+    if (!ok && senderId && senderId.endsWith("@lid")) {
+      try {
+        const contact = await boundedCall("delivery-group-sender", () => msg.getContact());
+        const rawNumber =
+          (contact && contact.number) || ((contact && contact.id && contact.id._serialized) || "").replace(/@.*/, "");
+        ok = !!rawNumber && allowed.some((n) => !n.includes("@") && n === rawNumber);
+        console.log(`${ok ? "✅" : "ℹ️"} [ربط مجموعة] معرّف @lid "${senderId}" -> "${rawNumber || "؟"}" (${ok ? "متطابق" : "مش متطابق"})`);
+      } catch (err) {
+        console.log(`⚠️ [ربط مجموعة] تعذّر ترجمة معرّف @lid للمرسل: ${err.message}`);
+      }
+    }
     if (!ok) return false;
   }
   const regionKey = deliveryStore.REGION_BY_WORD[m[1]];
