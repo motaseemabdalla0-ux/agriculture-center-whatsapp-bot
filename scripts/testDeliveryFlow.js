@@ -1,8 +1,8 @@
 process.env.RATE_LIMIT_HOURLY = process.env.RATE_LIMIT_HOURLY || "1000";
 process.env.RATE_LIMIT_DAILY = process.env.RATE_LIMIT_DAILY || "1000";
 process.env.CAMPAIGN_TEST_FAST = "true";
-// اختبارات حوار "استلام/توصيل البطاقة" + توجيه الطلب لمجموعة المنطقة. Fake Client بس - صفر واتساب
-// حقيقي، وبيرجّع كل ملفات البيانات الحقيقية زي ما كانت في الآخر (نجح أو فشل).
+// اختبارات حوار "استلام/توصيل البطاقة" (بما فيها خطوة اليوم/الوقت الجديدة) + توجيه الطلب لمجموعة
+// المنطقة. Fake Client بس - صفر واتساب حقيقي، وبيرجّع كل ملفات البيانات الحقيقية زي ما كانت في الآخر.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -36,6 +36,8 @@ const TEXTS = {
   DELIVERY_ASK_REGION: "ASK_REGION",
   DELIVERY_REMINDER_CHOICE: "REMIND_CHOICE",
   DELIVERY_REMINDER_REGION: "REMIND_REGION",
+  DELIVERY_ASK_DATETIME: "ASK_DATETIME",
+  DELIVERY_REMINDER_DATETIME: "REMIND_DATETIME",
   DELIVERY_THANKS: "THANKS {region}",
   DELIVERY_LOCATION_UNKNOWN: "LOCATION_UNKNOWN",
 };
@@ -49,8 +51,8 @@ async function run() {
   const flow = require("../lib/deliveryFlow");
   const cfg = require("../config");
 
-  console.log("\n=== 1) رسالة الاستلام الحالية ما اتعدّلتش، وحالة الانتظار مش بتتفعّل بيها ===");
-  check("1: CARD_PICKUP_TEMPLATE الحالي مفيهوش خيار توصيل -> مفيش حالة انتظار", store.templateOffersDelivery(cfg.CARD_PICKUP_TEMPLATE) === false);
+  console.log("\n=== 1) رسالة الاستلام الرسمية الجديدة بتفعّل حالة الانتظار (فيها خيار توصيل) ===");
+  check("1: CARD_PICKUP_TEMPLATE الرسمي الجديد فيه خيار توصيل -> بيفعّل حالة الانتظار", store.templateOffersDelivery(cfg.CARD_PICKUP_TEMPLATE) === true);
   check("1ب: نص فيه كلمة توصيل بيفعّل الحالة", store.templateOffersDelivery("1- الاستلام 2- توصيل البطاقة") === true);
 
   console.log("\n=== 2) من غير حالة انتظار: مش مُعالَج (يكمّل قائمة البوت العادية) ===");
@@ -62,7 +64,7 @@ async function run() {
   check("3: رد تأكيد الاستلام", r.handled && r.reply === "PICKUP_OK" && !r.request);
   check("3ب: حالة الانتظار اتمسحت", flow.handleReply("966501111111", "1", getText).handled === false);
 
-  console.log("\n=== 4) توصيل (2) ثم منطقة ===");
+  console.log("\n=== 4) توصيل (2) ثم منطقة ثم اليوم/الوقت ===");
   store.markAwaitingChoice("966502222222", "خالد");
   r = flow.handleReply("966502222222", "hello", getText);
   check("4: رد غير صحيح -> تذكير بالخيارين وتفضل الحالة", r.handled && r.reply === "REMIND_CHOICE" && store.getPending("966502222222").step === "CHOICE");
@@ -71,16 +73,20 @@ async function run() {
   r = flow.handleReply("966502222222", "9", getText);
   check("4ج: منطقة غير صحيحة -> تذكير بالمناطق", r.reply === "REMIND_REGION" && !r.request);
   r = flow.handleReply("966502222222", "2", getText);
-  check("4د: منطقة 2 = الجنوب، طلب اتسجّل", r.handled && r.request && r.request.regionKey === "SOUTH" && r.reply === "THANKS الجنوب" && r.request.name === "خالد");
-  check("4هـ: حالة الانتظار اتمسحت بعد الطلب", store.getPending("966502222222") === null);
+  check("4د: منطقة 2 = الجنوب -> ينتقل لخطوة اليوم/الوقت، مفيش طلب لسه", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502222222").step === "DATETIME" && store.getPending("966502222222").regionKey === "SOUTH");
+  r = flow.handleReply("966502222222", "ح", getText);
+  check("4هـ: يوم/وقت قصير جدًا -> تذكير ولا يتسجّل طلب", r.reply === "REMIND_DATETIME" && !r.request && store.getPending("966502222222").step === "DATETIME");
+  r = flow.handleReply("966502222222", "الأحد الساعة 10 صباحًا", getText);
+  check("4و: يوم/وقت صحيح -> الطلب اتسجّل بمنطقته ووقته", r.handled && r.request && r.request.regionKey === "SOUTH" && r.request.preferredDateTime === "الأحد الساعة 10 صباحًا" && r.reply === "THANKS الجنوب" && r.request.name === "خالد");
+  check("4ز: حالة الانتظار اتمسحت بعد الطلب", store.getPending("966502222222") === null);
 
-  console.log("\n=== 4و) clearGroups بيشيل الربط الثلاثة كلهم دفعة واحدة (لأمر تفكيك مجموعات التوصيل) ===");
+  console.log("\n=== 4ح) clearGroups بيشيل الربط الثلاثة كلهم دفعة واحدة (لأمر تفكيك مجموعات التوصيل) ===");
   store.setGroup("NORTH", "999@g.us");
   store.setGroup("SOUTH", "999@g.us");
   store.setGroup("CENTER", "999@g.us");
-  check("4و: التلاتة مربوطين قبل التفكيك", Object.keys(store.getGroups()).length === 3);
+  check("4ط: التلاتة مربوطين قبل التفكيك", Object.keys(store.getGroups()).length === 3);
   store.clearGroups();
-  check("4ز: مفيش أي مجموعة مربوطة بعد clearGroups", Object.keys(store.getGroups()).length === 0);
+  check("4ي: مفيش أي مجموعة مربوطة بعد clearGroups", Object.keys(store.getGroups()).length === 0);
 
   console.log("\n=== 5) توجيه الطلب لمجموعة المنطقة الصح فقط ===");
   store.setGroup("NORTH", "111@g.us");
@@ -90,12 +96,13 @@ async function run() {
   const fakeClient = { sendMessage: async (to, text) => { sent.push({ to, text }); return true; } };
   const fwd = await flow.forwardRequest(fakeClient, r.request);
   check("5: اتبعت مرة واحدة لمجموعة الجنوب بس", fwd.ok && sent.length === 1 && sent[0].to === "222@g.us");
-  check("5ب: نص المجموعة فيه الاسم ورابط wa.me والمنطقة ومعرّف الطلب", sent[0].text.includes("خالد") && sent[0].text.includes("https://wa.me/966502222222") && sent[0].text.includes("الجنوب") && sent[0].text.includes(r.request.id));
+  check("5ب: نص المجموعة فيه الاسم ورابط wa.me والمنطقة ومعرّف الطلب واليوم/الوقت", sent[0].text.includes("خالد") && sent[0].text.includes("https://wa.me/966502222222") && sent[0].text.includes("الجنوب") && sent[0].text.includes(r.request.id) && sent[0].text.includes("الأحد الساعة 10 صباحًا"));
   check("5ج: الطلب متعلّم كمُرسل", store.listOpenRequests().find((x) => x.id === r.request.id).forwarded === true);
 
   store.markAwaitingChoice("966503333333", "سعد");
   flow.handleReply("966503333333", "2", getText);
-  const r3 = flow.handleReply("966503333333", "1", getText);
+  flow.handleReply("966503333333", "1", getText);
+  const r3 = flow.handleReply("966503333333", "غدًا صباحًا", getText);
   const sent2 = [];
   await flow.forwardRequest({ sendMessage: async (to) => { sent2.push(to); } }, r3.request);
   check("5د: منطقة 1 = الشمال -> مجموعة الشمال", sent2.length === 1 && sent2[0] === "111@g.us");
@@ -105,7 +112,8 @@ async function run() {
   if (fs.existsSync(path.join(ROOT, "delivery_state.json.bak"))) fs.unlinkSync(path.join(ROOT, "delivery_state.json.bak"));
   store.markAwaitingChoice("966504444444", "ماجد");
   flow.handleReply("966504444444", "2", getText);
-  const r4 = flow.handleReply("966504444444", "3", getText);
+  flow.handleReply("966504444444", "3", getText);
+  const r4 = flow.handleReply("966504444444", "الخميس بعد الظهر", getText);
   const noSend = [];
   const res4 = await flow.forwardRequest({ sendMessage: async (to) => noSend.push(to) }, r4.request);
   check("6: مفيش مجموعة مربوطة -> مفيش إرسال والطلب محفوظ بتنبيه", !res4.ok && noSend.length === 0 && store.listOpenRequests()[0].forwarded === false);
@@ -131,30 +139,32 @@ async function run() {
     flow.handleReply("966506666666", "2", getText); // اختار توصيل -> بقى في خطوة REGION
     // نقطة مركز "AlUla" الفعلية من ملف مناطق_مركز_الزراعة_العلا.kmz الرسمي -> المفروض تتصنّف "الشمال"
     let r = flow.handleLocation("966506666666", 26.626, 37.9265, getText);
-    check("7هـ: موقع داخل منطقة AlUla -> اتصنّف الشمال تلقائيًا", r.handled && r.request && r.request.regionKey === "NORTH" && r.request.district === "AlUla" && r.request.autoDetected === true && r.reply === "THANKS الشمال");
-    check("7و: حالة الانتظار اتمسحت بعد التصنيف التلقائي", store.getPending("966506666666") === null);
+    check("7هـ: موقع داخل منطقة AlUla -> اتصنّف الشمال تلقائيًا، وينتقل لخطوة اليوم/الوقت", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966506666666").step === "DATETIME" && store.getPending("966506666666").regionKey === "NORTH" && store.getPending("966506666666").district === "AlUla" && store.getPending("966506666666").autoDetected === true);
+    r = flow.handleReply("966506666666", "الاثنين صباحًا", getText);
+    check("7و: بعد كتابة الوقت، الطلب اتسجّل بالمنطقة التلقائية وحالة الانتظار اتمسحت", r.request && r.request.regionKey === "NORTH" && r.request.district === "AlUla" && r.request.autoDetected === true && r.request.preferredDateTime === "الاثنين صباحًا" && r.reply === "THANKS الشمال" && store.getPending("966506666666") === null);
 
     // نقطة مركز "Al Ibriq" -> المفروض الجنوب
     store.markAwaitingChoice("966507777777", "منى");
     flow.handleReply("966507777777", "2", getText);
-    r = flow.handleLocation("966507777777", 25.7152, 38.6513, getText);
+    flow.handleLocation("966507777777", 25.7152, 38.6513, getText);
+    r = flow.handleReply("966507777777", "أي وقت مناسب", getText);
     check("7ز: موقع داخل منطقة Al Ibriq -> اتصنّف الجنوب تلقائيًا", r.request && r.request.regionKey === "SOUTH" && r.request.district === "Al Ibriq");
 
     // موقع برّه كل المناطق الـ14 المعروفة (زي وسط البحر الأحمر) -> ممنوع نخمّن، نطلب اختيار يدوي
     store.markAwaitingChoice("966508888888", "فيصل");
     flow.handleReply("966508888888", "2", getText);
     r = flow.handleLocation("966508888888", 22.0, 39.0, getText);
-    check("7ح: موقع خارج كل المناطق المعروفة -> رسالة توضيحية بدون تخمين، وحالة الانتظار فاضلة", r.handled && !r.request && r.reply === "LOCATION_UNKNOWN" && store.getPending("966508888888").step === "REGION");
+    check("7ح: موقع خارج كل المناطق المعروفة -> رسالة توضيحية بدون تخمين، وحالة الانتظار فاضلة في REGION", r.handled && !r.request && r.reply === "LOCATION_UNKNOWN" && store.getPending("966508888888").step === "REGION");
 
     // نص رسالة المجموعة يوضّح إن المنطقة اتحددت تلقائيًا من الموقع
     const groupText = flow.formatGroupMessage(store.listOpenRequests().find((x) => x.regionKey === "NORTH"));
-    check("7ط: نص المجموعة يوضّح 'محدَّدة تلقائيًا من الموقع' واسم المنطقة الفعلية (AlUla)", groupText.includes("محدَّدة تلقائيًا من الموقع") && groupText.includes("AlUla"));
+    check("7ط: نص المجموعة يوضّح 'محدَّدة تلقائيًا من الموقع' واسم المنطقة الفعلية (AlUla) والوقت المفضّل", groupText.includes("محدَّدة تلقائيًا من الموقع") && groupText.includes("AlUla") && groupText.includes("الاثنين صباحًا"));
   }
 
   console.log("\n=== 8) Hook onSent في runPersonalizedBroadcast (نفس رسالة الاستلام + fake client) ===");
   const { runPersonalizedBroadcast } = require("../lib/personalizedRunner");
   const csv = path.join(os.tmpdir(), `pickup_${Date.now()}.csv`);
-  fs.writeFileSync(csv, "أحمد سالم,0506666666\n", "utf8");
+  fs.writeFileSync(csv, "أحمد سالم,0509999999\n", "utf8");
   const calls = [];
   const client = { getNumberId: async (p) => ({ _serialized: `${p}@c.us` }), sendMessage: async () => true };
   const summary = await runPersonalizedBroadcast(client, {
@@ -162,12 +172,12 @@ async function run() {
     logFile: path.join(os.tmpdir(), `pickup_log_${Date.now()}.txt`), logLabel: "اختبار", campaignType: "card_pickup", messageSource: "SYSTEM_NOTIFICATION",
     onSent: (info) => calls.push(info),
   });
-  check("8: الإرسال نجح والـhook اتنادى مرة واحدة بالرقم والاسم", summary.sent === 1 && calls.length === 1 && calls[0].phone === "966506666666" && calls[0].name === "أحمد سالم");
+  check("8: الإرسال نجح والـhook اتنادى مرة واحدة بالرقم والاسم", summary.sent === 1 && calls.length === 1 && calls[0].phone === "966509999999" && calls[0].name === "أحمد سالم");
   fs.unlinkSync(csv);
 
-  console.log("\n=== 9) صفر واتساب حقيقي / رسالة الاستلام الأصلية ما اتلمستش ===");
+  console.log("\n=== 9) صفر واتساب حقيقي / منطق التوصيل فيه استدعاء واحد بس للإرسال الحقيقي ===");
   const cfgSrc = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
-  check("9: CARD_PICKUP_TEMPLATE سليم (إبراز الهوية) وبدون خيار توصيل", cfgSrc.includes("نفيدكم بجاهزية بطاقة المزرعة للاستلام من مركز الزراعة – حي ساق") && !/CARD_PICKUP_TEMPLATE: `[^`]*توصيل/.test(cfgSrc));
+  check("9: CARD_PICKUP_TEMPLATE الرسمي الجديد موجود بالكامل", cfgSrc.includes("يسرّنا إشعاركم بجاهزية بطاقة") && cfgSrc.includes("الاستلام المباشر: من مركز الزراعة بحي ساق"));
   const flowSrc = fs.readFileSync(path.join(ROOT, "lib", "deliveryFlow.js"), "utf8") + fs.readFileSync(path.join(ROOT, "lib", "deliveryStore.js"), "utf8");
   check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage لمجموعة المنطقة", (flowSrc.match(/sendMessage/g) || []).length === 1);
 
