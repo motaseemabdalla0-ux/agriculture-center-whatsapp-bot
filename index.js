@@ -32,6 +32,7 @@ const editorStore = require("./lib/editorStore");
 const driveWatcher = require("./lib/driveWatcher");
 const portalSync = require("./lib/portalSync");
 const codeUpdateWatcher = require("./lib/codeUpdateWatcher");
+const gitAutoUpdate = require("./updater/gitAutoUpdate");
 const sendLog = require("./lib/sendLog");
 const sentTracker = require("./lib/sentTracker");
 const { parseCsv, csvField } = require("./lib/csvUtil");
@@ -352,6 +353,8 @@ client.on("ready", () => {
     console.log('ℹ️ عايز ربط نظام البطاقات تلقائيًا؟ انسخ portal_config.example.js لـ portal_config.js واملأ بياناتك.');
   }
   watchForTriggers();
+  startGitAutoUpdateWatcher();
+  console.log(`🔄 تحديث GitHub تلقائي مفعّل - هيتفحص كل ${GIT_AUTO_UPDATE_INTERVAL_MS / 60000} دقايق ويسحب أي كود جديد بعد ما يتأكد إنه سليم.`);
 });
 
 const REGISTRATION_CSV = path.join(__dirname, "registration_status.csv");
@@ -537,6 +540,35 @@ async function runExclusive(label, fn) {
     broadcastInProgress = false;
   }
   return true;
+}
+
+const GIT_AUTO_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // كل 5 دقائق - تحديث تلقائي من GitHub من غير أي تدخل يدوي
+
+// بيتأكد دوريًا هل فيه Commit جديد على origin/main، ولو فيه بيسحبه ويتأكد إنه سليم (صياغة +
+// كل اختبارات طبقة الأمان) قبل ما يعيد تشغيل نفسه بيه - تمامًا زي "تحديث الكود" (مجلد درايف)
+// بس المصدر هنا GitHub مباشرة بدل ملف بيتحط يدويًا. لو الفحص فشل، الكود بيرجع لآخر نسخة سليمة
+// تلقائيًا ومفيش أي إعادة تشغيل - البوت فاضل شغّال بالكود القديم الآمن من غير أي انقطاع
+function startGitAutoUpdateWatcher() {
+  setInterval(async () => {
+    if (broadcastInProgress) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
+    try {
+      const result = await gitAutoUpdate.pullAndVerify();
+      if (result.aborted) {
+        console.log(
+          `🚨 [تحديث GitHub تلقائي] وصل كود جديد (${result.fromHash.slice(0, 7)} -> ${result.attemptedHash.slice(0, 7)}) لكن فشل في بوابة الأمان (${result.gate.stage}) - تم الرجوع للكود القديم تلقائيًا، البوت مستمر بالكود الحالي من غير تأثير.`
+        );
+        return;
+      }
+      if (result.updated) {
+        console.log(
+          `🔄 [تحديث GitHub تلقائي] كود جديد اتسحب ونجح في كل الفحوصات (${result.fromHash.slice(0, 7)} -> ${result.toHash.slice(0, 7)}) - البوت هيعيد تشغيل نفسه دلوقتي عشان الكود الجديد يشتغل...`
+        );
+        process.exit(0);
+      }
+    } catch (err) {
+      console.log(`⚠️ [تحديث GitHub تلقائي] تعذّر فحص/سحب التحديث: ${err.message}`);
+    }
+  }, GIT_AUTO_UPDATE_INTERVAL_MS);
 }
 
 function watchForTriggers() {
