@@ -1395,9 +1395,9 @@ async function handleControlCommand(msg) {
     }
 
     // البوت ينشئ مجموعات التوصيل الثلاث بنفسه ويربطها تلقائيًا - بدل الإنشاء اليدوي + "ربط مجموعة".
-    // الأعضاء: الموظفين المسجّلين حاليًا (اضف موظف ...) بالإضافة لرقم البوت نفسه (مُنشئ المجموعة).
-    // مفيش استبدال لمجموعات مربوطة بالفعل، تفاديًا لتكرار الإنشاء بالغلط - لازم "تفكيك مجموعات
-    // التوصيل" الأول لو حابب تعيد الإنشاء
+    // الأعضاء: موظف/موظفي كل منطقة المخصّصين لها بأمر "اضف موظف توصيل" (لو مخصص حد لمنطقة)، وإلا
+    // بيرجع لقائمة موظفي خدمة المزارعين العامة (staffStore) كـfallback. مفيش استبدال لمجموعات
+    // مربوطة بالفعل، تفاديًا لتكرار الإنشاء بالغلط - لازم "تفكيك مجموعات التوصيل" الأول لو حابب تعيد الإنشاء
     if (/^انشاء\s*مجموعات\s*التوصيل$/i.test(text)) {
       const existing = deliveryStore.getGroups();
       const already = Object.values(deliveryStore.REGIONS).filter((r) => existing[r.key]);
@@ -1407,28 +1407,67 @@ async function handleControlCommand(msg) {
         );
         return;
       }
-      const staff = staffStore.getStaff().map((n) => `${n}@c.us`);
-      if (staff.length === 0) {
-        await msg.reply('⚠️ مفيش موظفين مسجّلين حاليًا. ضيف موظف الأول بأمر "اضف موظف <رقم>" عشان يكون عضو في المجموعات.');
+      const fallbackStaff = staffStore.getStaff();
+      const regionsMissingStaff = Object.values(deliveryStore.REGIONS).filter(
+        (r) => deliveryStore.getRegionStaff(r.key).length === 0 && fallbackStaff.length === 0
+      );
+      if (regionsMissingStaff.length > 0) {
+        await msg.reply(
+          `⚠️ مفيش موظف مخصّص لـ${regionsMissingStaff.map((r) => r.ar).join("، ")} (ولا موظف عام كـfallback). ضيف موظف بأمر "اضف موظف توصيل <رقم> <المنطقة>" (مثال: اضف موظف توصيل 966536667882 الوسط).`
+        );
         return;
       }
-      await msg.reply(`⏳ جاري إنشاء 3 مجموعات توصيل (الشمال/الجنوب/الوسط) بعضوية ${staff.length} موظف...`);
+      await msg.reply(`⏳ جاري إنشاء 3 مجموعات توصيل (الشمال/الجنوب/الوسط)، كل مجموعة بموظفها المخصّص...`);
       const results = [];
       for (const region of Object.values(deliveryStore.REGIONS)) {
+        const regionStaff = deliveryStore.getRegionStaff(region.key);
+        const members = (regionStaff.length > 0 ? regionStaff : fallbackStaff).map((n) => `${n}@c.us`);
         try {
-          const result = await client.createGroup(`توصيل بطاقات - ${region.ar}`, staff);
+          const result = await client.createGroup(`توصيل بطاقات - ${region.ar}`, members);
           if (typeof result === "string") {
             results.push(`❌ ${region.ar}: فشل الإنشاء (${result})`);
             continue;
           }
           deliveryStore.setGroup(region.key, result.gid._serialized);
           const failed = Object.values(result.participants).filter((p) => p.statusCode !== 200).length;
-          results.push(`✅ ${region.ar}: اتربطت${failed > 0 ? ` (تعذّر إضافة ${failed} من الموظفين مباشرة - هيوصلهم دعوة)` : ""}`);
+          results.push(`✅ ${region.ar}: اتربطت (${regionStaff.length > 0 ? "موظف مخصّص" : "موظف عام - fallback"})${failed > 0 ? ` - تعذّر إضافة ${failed} مباشرة، هيوصلهم دعوة` : ""}`);
         } catch (err) {
           results.push(`❌ ${region.ar}: ${err.message}`);
         }
       }
       await msg.reply(`🚚 نتيجة إنشاء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      return;
+    }
+
+    // إضافة/حذف موظف مخصّص لمنطقة توصيل معينة (يُستخدم كعضو في مجموعة تلك المنطقة فقط عند
+    // "انشاء مجموعات التوصيل" - منفصل عن قائمة موظفي خدمة المزارعين العامة)
+    const addRegionStaffMatch = toWesternDigits(text).match(/^اضف\s*موظف\s*توصيل\s+(\d{8,15})\s+(الشمال|الجنوب|الوسط)$/i);
+    if (addRegionStaffMatch) {
+      const [, phone, regionWord] = addRegionStaffMatch;
+      const regionKey = deliveryStore.REGION_BY_WORD[regionWord];
+      const added = deliveryStore.assignRegionStaff(regionKey, phone);
+      await msg.reply(
+        added ? `✅ تمت إضافة ${phone} كموظف توصيل لمنطقة ${regionWord}.` : `ℹ️ الرقم ${phone} مضاف بالفعل لمنطقة ${regionWord}.`
+      );
+      return;
+    }
+
+    const removeRegionStaffMatch = toWesternDigits(text).match(/^احذف\s*موظف\s*توصيل\s+(\d{8,15})\s+(الشمال|الجنوب|الوسط)$/i);
+    if (removeRegionStaffMatch) {
+      const [, phone, regionWord] = removeRegionStaffMatch;
+      const regionKey = deliveryStore.REGION_BY_WORD[regionWord];
+      const removed = deliveryStore.removeRegionStaff(regionKey, phone);
+      await msg.reply(removed ? `✅ تم حذف ${phone} من موظفي توصيل ${regionWord}.` : `ℹ️ الرقم ${phone} مش مسجّل لمنطقة ${regionWord}.`);
+      return;
+    }
+
+    if (/^موظفين\s*التوصيل$/i.test(text)) {
+      const all = deliveryStore.getAllRegionStaff();
+      const lines = Object.values(deliveryStore.REGIONS).map((r) => {
+        const list = all[r.key] || [];
+        return `• ${r.ar}: ${list.length ? list.join("، ") : "مفيش موظف مخصّص (هيستخدم الموظفين العامين كـfallback)"}`;
+      });
+      await msg.reply(`👷 موظفو التوصيل لكل منطقة:\n\n${lines.join("\n")}`);
       return;
     }
 
