@@ -167,6 +167,18 @@ async function run() {
   // استدعاءين بس: نص رسالة المجموعة + pin الموقع - الاتنين لمجموعة المنطقة بس
   check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage (نص + pin موقع) لمجموعة المنطقة", (flowSrc.match(/sendMessage/g) || []).length === 2);
 
+  console.log("\n=== 10) getAllPending + sentTracker.unmarkSent (لإعادة إرسال إشعار الاستلام لمن لسه في انتظار قرار) ===");
+  const sentTracker = require("../lib/sentTracker");
+  store.markAwaitingChoice("966510000001", "منصور");
+  store.markAwaitingChoice("966510000002", "فهد");
+  flow.handleReply("966510000002", "1", getText); // ده حسم قراره (استلام) - المفروض يختفي من getAllPending
+  const allPending = store.getAllPending();
+  check("10: getAllPending بترجع بس اللي لسه في انتظار (مش اللي حسموا قرارهم)", allPending.some((p) => p.phone === "966510000001") && !allPending.some((p) => p.phone === "966510000002"));
+  sentTracker.markSent("card_pickup", "966510000001");
+  check("10ب: markSent + hasBeenSent شغالين", sentTracker.hasBeenSent("card_pickup", "966510000001") === true);
+  check("10ج: unmarkSent بيشيل الرقم فعليًا", sentTracker.unmarkSent("card_pickup", "966510000001") === true && sentTracker.hasBeenSent("card_pickup", "966510000001") === false);
+  check("10د: unmarkSent لرقم مش موجود أصلًا بيرجع false", sentTracker.unmarkSent("card_pickup", "966599999999") === false);
+
   console.log(`\n🎉 كل اختبارات حوار الاستلام/التوصيل نجحت (${passed} اختبار). صفر رسائل واتساب حقيقية.`);
 }
 
