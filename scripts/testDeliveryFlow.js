@@ -178,6 +178,8 @@ async function run() {
   check("10ب: markSent + hasBeenSent شغالين", sentTracker.hasBeenSent("card_pickup", "966510000001") === true);
   check("10ج: unmarkSent بيشيل الرقم فعليًا", sentTracker.unmarkSent("card_pickup", "966510000001") === true && sentTracker.hasBeenSent("card_pickup", "966510000001") === false);
   check("10د: unmarkSent لرقم مش موجود أصلًا بيرجع false", sentTracker.unmarkSent("card_pickup", "966599999999") === false);
+  sentTracker.markSent("card_pickup", "966510000003");
+  check("10هـ: getSentList بترجع كل الأرقام المسجّلة لنوع معيّن", sentTracker.getSentList("card_pickup").includes("966510000003") && sentTracker.getSentList("nonexistent_type").length === 0);
 
   console.log(`\n🎉 كل اختبارات حوار الاستلام/التوصيل نجحت (${passed} اختبار). صفر رسائل واتساب حقيقية.`);
 }
