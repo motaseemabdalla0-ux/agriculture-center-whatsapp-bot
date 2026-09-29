@@ -878,6 +878,10 @@ async function processFarmerMessage(msg) {
         );
         session.state = "AWAITING_TICKET_CATEGORY";
         logEvent("choice_3", chatId);
+      } else if (msg.hasMedia) {
+        // مزارع بعت مستند/صورة من غير رقم قائمة (مثلًا صك أرض) - الحدث اتسجّل بالفعل فوق
+        // (document_received) عشان "المعلقات"، بس ممنوع نرد بالقائمة الرئيسية هنا لأنها مش
+        // رد فعلي على استفسار، وبتبان للمزارع كأن البوت مش فاهم اللي بعته
       } else {
         replied = await safeReply(msg, getCfgText("MAIN_MENU"));
         logEvent("invalid_choice", chatId);
