@@ -254,15 +254,46 @@ process.on("uncaughtException", (err) => {
   console.log(`⚠️ خطأ غير متوقع (تم تجاهله عشان البوت يفضل شغال): ${err.message}`);
 });
 
-// نسخة آمنة من الرد بترجع false لو فشلت بدل ما توقف البوت كله
+// معرّف الرسالة بصيغة قابلة للاستخدام كـquotedMessageId - رسائل @lid بترجّع معرّفها تحت اسم $1
+// بدل _serialized (نفس مشكلة LID Migration الموثقة في lib/downloadMediaCompat.js)
+function messageId(msg) {
+  const id = msg.id || {};
+  return id._serialized || id.$1 || null;
+}
+
+// نسخة آمنة من الرد بترجع false لو فشلت بدل ما توقف البوت كله. msg.reply() بتفشل مع رسائل @lid
+// (بتعتمد على _serialized اللي مبقاش موجود في الصيغة دي) - fallback: نبعت رسالة عادية لنفس
+// الشات مع quotedMessageId محسوب يدويًا، بدل ما نسيب المزارع من غير أي رد خالص
 async function safeReply(msg, text) {
   try {
     await msg.reply(text);
     return true;
   } catch (err) {
-    console.log(`⚠️ فشل إرسال رد (مشكلة معروفة في مكتبة whatsapp-web.js حاليًا): ${err.message}`);
-    return false;
+    console.log(`⚠️ فشل إرسال رد عادي (${err.message}) - بجرّب رد بديل (مشكلة @lid معروفة)...`);
+    try {
+      const quotedId = messageId(msg);
+      await boundedCall("safe-reply-fallback", () => client.sendMessage(msg.from, text, quotedId ? { quotedMessageId: quotedId } : undefined), 15000);
+      return true;
+    } catch (err2) {
+      console.log(`⚠️ فشل الرد البديل كمان: ${err2.message}`);
+      return false;
+    }
   }
+}
+
+// قفل نظيف بدل process.exit() مباشر: بنستنى أي عملية إرسال شغالة فعليًا تخلص (لحد 30 ثانية)،
+// وبعدين نقفل جلسة واتساب (client.destroy()) بمهلة 15 ثانية قبل ما نقفل العملية. من غير كده
+// Chrome بيفضل فاتح ماسك ملفات الجلسة، والتشغيلة الجاية (PM2) بتعلّق من غير ما تعرف تفتح واتساب
+// من غير أي خطأ ظاهر في اللوج - أصعب حاجة تتشخّص لأنها "مفيش خطأ" أصلاً
+let exiting = false;
+async function gracefulExit(code, reason) {
+  if (exiting) return;
+  exiting = true;
+  console.log(`🛑 [إغلاق نظيف] بيقفل (${reason})...`);
+  const deadline = Date.now() + 30000;
+  while (broadcastInProgress && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1000));
+  await Promise.race([client.destroy().catch(() => {}), new Promise((r) => setTimeout(r, 15000))]);
+  process.exit(code);
 }
 
 client.on("qr", (qr) => {
@@ -271,10 +302,10 @@ client.on("qr", (qr) => {
 });
 
 // لو حصل انقطاع في الاتصال (نت اتقطع، الكهربا رجعت، جلسة واتساب اتلغت...)
-// أضمن حاجة إن البوت يقفل نفسه، وPM2 هيرجّعه يشتغل تلقائيًا من الصفر بعد ثواني
+// أضمن حاجة إن البوت يقفل نفسه بنظافة، وPM2 هيرجّعه يشتغل تلقائيًا من الصفر بعد ثواني
 client.on("disconnected", (reason) => {
   console.log(`⚠️ انقطع الاتصال بواتساب (${reason}). البوت هيتقفل عشان PM2 يرجّعه يشتغل تلقائيًا...`);
-  process.exit(1);
+  gracefulExit(1, "انقطع الاتصال بواتساب");
 });
 
 // أحداث تشخيصية إضافية - عشان لو مرحلة التشغيل الأولى (فتح Chrome/تحميل واتساب ويب) علّقت أو
@@ -289,15 +320,84 @@ client.on("auth_failure", (msg) => {
 // حماية: لو "ready" ما وصلتش خلال المهلة دي من بدء التشغيل، يبقى فيه تعليق حقيقي
 // (زي مشكلة تشغيل Chrome) - نقفل العملية بنفسنا عشان PM2 يرجّعها من الصفر، بدل ما تفضل
 // واقفة للأبد من غير أي رد أو أثر (وده بالظبط اللي كان بيحصل قبل الإصلاح ده)
-const READY_TIMEOUT_MS = 120000;
+const READY_TIMEOUT_MS = 240000;
 const readyTimeout = setTimeout(() => {
   console.log(
     `🚨 [مهلة الاتصال] البوت ما اتصلش بواتساب خلال ${READY_TIMEOUT_MS / 1000} ثانية من بدء التشغيل - ` +
       `غالبًا مشكلة في تشغيل Chrome (عمليات عالقة/قلة رام/ملف قفل). هيتقفل عشان PM2 يرجّعه من جديد.`
   );
-  process.exit(1);
+  gracefulExit(1, "التشغيل علّق");
 }, READY_TIMEOUT_MS);
 client.on("ready", () => clearTimeout(readyTimeout));
+
+// Chrome ممكن يعلّق وهو شغّال (خصوصًا مع الرام العالية على الجهاز ده) والبوت يفضل "online" في
+// PM2 وهو فعليًا مش بيستقبل ولا بيبعت حاجة. كل 5 دقايق بنسأل واتساب عن حالته؛ 3 فشلات ورا بعض
+// (بمهلة دقيقة لكل محاولة) = نقفل بنظافة وPM2 يعيد التشغيل
+let watchdogFailures = 0;
+setInterval(async () => {
+  if (!client.info || exiting) return;
+  try {
+    const state = await boundedCall("watchdog-getState", () => client.getState(), 60000);
+    if (state !== "CONNECTED") throw new Error(String(state));
+    watchdogFailures = 0;
+  } catch (err) {
+    watchdogFailures++;
+    console.log(`⚠️ [صحة البوت] فحص حالة واتساب فشل (${watchdogFailures}/3): ${err.message}`);
+    if (watchdogFailures >= 3) gracefulExit(1, "واتساب مش بيستجيب");
+  }
+}, 5 * 60 * 1000);
+
+// Chrome يتيم من تشغيلة قبل كده لسه ماسك جلسة البوت ده بالتحديد (بمجلد المشروع ده - مش بوت
+// تاني شغّال على نفس الجهاز زي work-order-bot، وده مهم جدًا نتجنبه)
+function killOrphanChrome() {
+  if (process.platform !== "win32") return;
+  try {
+    const marker = __dirname.replace(/\\/g, "\\\\").replace(/'/g, "''");
+    const ps =
+      `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ` +
+      `Where-Object { $_.CommandLine -like '*${marker}*' } | ` +
+      `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }`;
+    const killed = require("child_process")
+      .execFileSync("powershell.exe", ["-NoProfile", "-Command", ps], { encoding: "utf8", timeout: 30000 })
+      .trim();
+    if (killed) console.log(`🧹 [بدء] اتقفلت عمليات Chrome يتيمة كانت ماسكة جلسة البوت ده: ${killed.split(/\s+/).join(", ")}`);
+  } catch (err) {
+    console.log(`⚠️ [بدء] تعذّر البحث عن Chrome يتيم: ${err.message}`);
+  }
+}
+killOrphanChrome();
+
+// إصلاح دفاعي لإرسال الملفات (مش بيصلح باگ نشط حاليًا - البوت ده بيستقبل ملفات بس، مايبعتش
+// ملفات لمزارعين/مجموعات لحد دلوقتي) - بس لو أي ميزة مستقبلية بعتت ملف، نفس المشكلة الموثقة في
+// whatsapp-web.js 1.34.7 مع واتساب ويب 2.3000.10477+ (processMediaData بيرجّع __x_id فاضي
+// فيغطّي على id الرسالة) هتحصل. التصحيح جوّه الصفحة نفسها (مش تعديل node_modules) عشان يفضل
+// شغّال بعد أي npm install. مرجع: whatsapp-web.js#201921
+async function patchMediaSend() {
+  try {
+    const patched = await boundedCall(
+      "patch-media-send",
+      () =>
+        client.pupPage.evaluate(() => {
+          const W = window.WWebJS;
+          if (!W || !W.processMediaData) return false;
+          if (W.__mediaIdPatch) return true;
+          const orig = W.processMediaData;
+          W.processMediaData = async (...args) => {
+            const data = await orig(...args);
+            const copy = { ...data };
+            delete copy.__x_id;
+            return copy;
+          };
+          W.__mediaIdPatch = true;
+          return true;
+        }),
+      10000
+    );
+    if (!patched) console.log("⚠️ [بدء] مقدرتش أطبّق إصلاح إرسال الملفات الدفاعي (مش مؤثر حاليًا - البوت مايبعتش ملفات).");
+  } catch (err) {
+    console.log(`⚠️ [بدء] فشل تطبيق إصلاح إرسال الملفات الدفاعي: ${err.message}`);
+  }
+}
 
 // Heartbeat بسيط لنظام تحديث GitHub (updater/healthCheck.js) - بيكتب وقت + إصدار كل فترة قصيرة
 // طول ما البوت شغّال ومتصل، عشان أي تحديث كود لاحق يقدر يتأكد إن البوت "صحي" فعليًا بعد إعادة
@@ -318,6 +418,7 @@ function writeHeartbeat() {
 
 client.on("ready", () => {
   console.log("✅ البوت شغّال ومتصل بواتساب.");
+  patchMediaSend();
   writeHeartbeat();
   setInterval(writeHeartbeat, 30000);
   console.log(
@@ -563,7 +664,7 @@ function startGitAutoUpdateWatcher() {
         console.log(
           `🔄 [تحديث GitHub تلقائي] كود جديد اتسحب ونجح في كل الفحوصات (${result.fromHash.slice(0, 7)} -> ${result.toHash.slice(0, 7)}) - البوت هيعيد تشغيل نفسه دلوقتي عشان الكود الجديد يشتغل...`
         );
-        process.exit(0);
+        gracefulExit(0, "تحديث GitHub تلقائي");
       }
     } catch (err) {
       console.log(`⚠️ [تحديث GitHub تلقائي] تعذّر فحص/سحب التحديث: ${err.message}`);
@@ -585,7 +686,7 @@ function watchForTriggers() {
         console.log(`⚠️ [تحديث الكود] اتجاهل: ${codeUpdate.skipped.join(", ")}`);
       }
       console.log("🔄 [تحديث الكود] البوت هيعيد تشغيل نفسه دلوقتي عشان الكود الجديد يشتغل...");
-      process.exit(0);
+      gracefulExit(0, "تحديث الكود اليدوي");
     }
 
     if (fs.existsSync(TRIGGER_FILE)) {
@@ -1495,7 +1596,7 @@ async function handleControlCommand(msg) {
             results.push(`✅ ${region.ar}: اتلاقت مجموعة موجودة بنفس الاسم من محاولة سابقة واتربطت (من غير إنشاء مجموعة جديدة)`);
             continue;
           }
-          const result = await client.createGroup(groupName, members);
+          const result = await boundedCall(`create-group-${region.key}`, () => client.createGroup(groupName, members), 30000);
           if (typeof result === "string") {
             results.push(`❌ ${region.ar}: فشل الإنشاء (${result})`);
             continue;
