@@ -51,6 +51,7 @@ audit_log.jsonl
 bot_heartbeat.json
 update_state.json
 git_update_pending_notice.json
+card_pickup_resend_history.json
 updater_workdir/
 updater_backups/
 campaign-inbox/data/
