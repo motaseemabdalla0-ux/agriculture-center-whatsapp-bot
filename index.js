@@ -182,6 +182,20 @@ function getAdminChatIds() {
   return merged.map((n) => (n.includes("@") ? n : `${n}@c.us`));
 }
 
+// بيبعت نص لـ"رسائلي" (رقم البوت نفسه) + كل أرقام المديرين - استخدام عام لأي تنبيه إداري
+// (زي نتيجة تحديث GitHub التلقائي)، كل رقم لوحده جوّه try/catch عشان فشل واحد ما يمنعش الباقي
+async function notifyAdmins(text) {
+  const selfChatId = client.info && client.info.wid ? client.info.wid._serialized : null;
+  const recipients = [...(selfChatId ? [selfChatId] : []), ...getAdminChatIds()];
+  for (const chatId of recipients) {
+    try {
+      await client.sendMessage(chatId, text);
+    } catch (err) {
+      console.log(`⚠️ فشل إرسال تنبيه إداري لـ ${chatId}: ${err.message}`);
+    }
+  }
+}
+
 const REPORT_HOUR = 20; // الساعة اللي بيتبعت فيها التقرير اليومي تلقائيًا (بتوقيت الجهاز)
 let lastReportSentDate = null;
 const PENDING_REMINDER_INTERVAL_MS = 4 * 60 * 60 * 1000; // كل 4 ساعات - بطلب صريح من الإدارة
@@ -419,6 +433,7 @@ function writeHeartbeat() {
 client.on("ready", () => {
   console.log("✅ البوت شغّال ومتصل بواتساب.");
   patchMediaSend();
+  notifyGitUpdateIfPending();
   writeHeartbeat();
   setInterval(writeHeartbeat, 30000);
   console.log(
@@ -643,7 +658,9 @@ async function runExclusive(label, fn) {
   return true;
 }
 
-const GIT_AUTO_UPDATE_INTERVAL_MS = 5 * 60 * 1000; // كل 5 دقائق - تحديث تلقائي من GitHub من غير أي تدخل يدوي
+const GIT_AUTO_UPDATE_INTERVAL_MS = 10 * 60 * 1000; // كل 10 دقائق - تحديث تلقائي من GitHub من غير أي تدخل يدوي
+const GIT_UPDATE_NOTICE_FILE = path.join(__dirname, "git_update_pending_notice.json");
+let gitUpdateFailureNotifiedFor = null; // آخر remoteHash اتبعت عنه تنبيه فشل - عشان منكررش نفس التنبيه كل 10 دقايق
 
 // بيتأكد دوريًا هل فيه Commit جديد على origin/main، ولو فيه بيسحبه ويتأكد إنه سليم (صياغة +
 // كل اختبارات طبقة الأمان) قبل ما يعيد تشغيل نفسه بيه - تمامًا زي "تحديث الكود" (مجلد درايف)
@@ -655,21 +672,51 @@ function startGitAutoUpdateWatcher() {
     try {
       const result = await gitAutoUpdate.pullAndVerify();
       if (result.aborted) {
+        const stageLabel = result.stage === "npm_install" ? `npm install فشل: ${result.error}` : result.stage;
         console.log(
-          `🚨 [تحديث GitHub تلقائي] وصل كود جديد (${result.fromHash.slice(0, 7)} -> ${result.attemptedHash.slice(0, 7)}) لكن فشل في بوابة الأمان (${result.gate.stage}) - تم الرجوع للكود القديم تلقائيًا، البوت مستمر بالكود الحالي من غير تأثير.`
+          `🚨 [تحديث GitHub تلقائي] وصل كود جديد (${result.fromHash.slice(0, 7)} -> ${result.attemptedHash.slice(0, 7)}) لكن فشل (${stageLabel}) - تم الرجوع للكود القديم تلقائيًا، البوت مستمر بالكود الحالي من غير تأثير.`
         );
+        // تنبيه مرة واحدة بس لكل remoteHash فاشل - عشان لو فضل فاشل، مش هيبعت نفس التنبيه كل 10 دقايق
+        if (gitUpdateFailureNotifiedFor !== result.attemptedHash) {
+          gitUpdateFailureNotifiedFor = result.attemptedHash;
+          await notifyAdmins(
+            `🚨 تحديث GitHub تلقائي فشل (${result.fromHash.slice(0, 7)} -> ${result.attemptedHash.slice(0, 7)})\n\nالسبب: ${stageLabel}\n\nتم الرجوع تلقائيًا للكود القديم السليم - البوت مستمر بدون أي تأثير. محتاج مراجعة يدوية للكود الجديد قبل أي محاولة تانية.`
+          ).catch(() => {});
+        }
         return;
       }
       if (result.updated) {
         console.log(
           `🔄 [تحديث GitHub تلقائي] كود جديد اتسحب ونجح في كل الفحوصات (${result.fromHash.slice(0, 7)} -> ${result.toHash.slice(0, 7)}) - البوت هيعيد تشغيل نفسه دلوقتي عشان الكود الجديد يشتغل...`
         );
+        // بنسجّل تفاصيل التحديث في ملف عشان نبلّغ الأدمن بعد ما البوت يرجع يشتغل بالكود الجديد
+        // (مش قبل كده - العملية هتتقفل فورًا فمفيش وقت نبعت فيه دلوقتي)
+        try {
+          fs.writeFileSync(GIT_UPDATE_NOTICE_FILE, JSON.stringify({ fromHash: result.fromHash, toHash: result.toHash, ranInstall: result.ranInstall, at: new Date().toISOString() }), "utf8");
+        } catch (writeErr) {
+          console.log(`⚠️ [تحديث GitHub تلقائي] فشل حفظ ملف التنبيه: ${writeErr.message}`);
+        }
         gracefulExit(0, "تحديث GitHub تلقائي");
       }
     } catch (err) {
       console.log(`⚠️ [تحديث GitHub تلقائي] تعذّر فحص/سحب التحديث: ${err.message}`);
     }
   }, GIT_AUTO_UPDATE_INTERVAL_MS);
+}
+
+// لو البوت رجع يشتغل بسبب تحديث GitHub تلقائي (ملف التنبيه موجود من قبل القفلة)، نبلّغ الأدمن
+// دلوقتي إن التحديث خلص ونجح، وبعدين نمسح الملف عشان منبلّغش تاني المرة الجاية اللي يشتغل فيها عادي
+async function notifyGitUpdateIfPending() {
+  if (!fs.existsSync(GIT_UPDATE_NOTICE_FILE)) return;
+  try {
+    const info = JSON.parse(fs.readFileSync(GIT_UPDATE_NOTICE_FILE, "utf8"));
+    fs.unlinkSync(GIT_UPDATE_NOTICE_FILE);
+    await notifyAdmins(
+      `✅ تحديث GitHub تلقائي نجح (${info.fromHash.slice(0, 7)} -> ${info.toHash.slice(0, 7)})${info.ranInstall ? " - شمل npm install لتغيّر في الاعتماديات" : ""}.\n\nالبوت شغّال دلوقتي بالكود الجديد ومتصل بواتساب.`
+    );
+  } catch (err) {
+    console.log(`⚠️ فشل إرسال تنبيه اكتمال تحديث GitHub: ${err.message}`);
+  }
 }
 
 function watchForTriggers() {
