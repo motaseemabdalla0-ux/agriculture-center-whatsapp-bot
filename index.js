@@ -278,15 +278,23 @@ function messageId(msg) {
 // نسخة آمنة من الرد بترجع false لو فشلت بدل ما توقف البوت كله. msg.reply() بتفشل مع رسائل @lid
 // (بتعتمد على _serialized اللي مبقاش موجود في الصيغة دي) - fallback: نبعت رسالة عادية لنفس
 // الشات مع quotedMessageId محسوب يدويًا، بدل ما نسيب المزارع من غير أي رد خالص
+// بيضيف تذييل "للرجوع للقائمة الرئيسية اضغط 0" آخر أي رد للمزارع - إلا لو النص أصلًا فيه
+// خيار الرجوع للقائمة (زي القائمة الرئيسية نفسها ورسالة "اختيار غير صحيح") عشان منكررهوش
+function appendMenuFooter(text) {
+  if (/(الرجوع|العودة) (إلى|الى) القائمة الرئيسية/.test(text)) return text;
+  return `${text}\n\n${getCfgText("MENU_FOOTER")}`;
+}
+
 async function safeReply(msg, text) {
+  const finalText = appendMenuFooter(text);
   try {
-    await msg.reply(text);
+    await msg.reply(finalText);
     return true;
   } catch (err) {
     console.log(`⚠️ فشل إرسال رد عادي (${err.message}) - بجرّب رد بديل (مشكلة @lid معروفة)...`);
     try {
       const quotedId = messageId(msg);
-      await boundedCall("safe-reply-fallback", () => client.sendMessage(msg.from, text, quotedId ? { quotedMessageId: quotedId } : undefined), 15000);
+      await boundedCall("safe-reply-fallback", () => client.sendMessage(msg.from, finalText, quotedId ? { quotedMessageId: quotedId } : undefined), 15000);
       return true;
     } catch (err2) {
       console.log(`⚠️ فشل الرد البديل كمان: ${err2.message}`);
