@@ -947,12 +947,36 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   return true;
 }
 
-// اسم مجموعة واتساب من معرّفها - بيدوّر جوّه قائمة الشاتات (client.getChats() بمهلة، نفس أسلوب
-// فحص المجموعات المكررة في "انشاء مجموعات التوصيل") - بيرجّع null لو تعذّر الوصول لأي سبب
+// اسم مجموعة واتساب من معرّفها - client.getChats()/getChatById() بيرموا خطأ "r" حاليًا (نفس
+// مشكلة LID Migration الموثقة في lib/downloadMediaCompat.js)، فبنقرا اسم المجموعة مباشرة من
+// داخل واتساب ويب نفسه (WAWebCollections.Chat) بدل ما نعتمد على أي دالة من مكتبة whatsapp-web.js
+// بتلف على _serialized - بيرجّع null لو تعذّر الوصول لأي سبب
 async function fetchGroupName(groupId) {
-  const chats = await boundedCall(`group-name-${groupId}`, () => client.getChats(), 15000);
-  const chat = (chats || []).find((c) => c.isGroup && c.id && c.id._serialized === groupId);
-  return chat ? chat.name : null;
+  return boundedCall(
+    `group-name-${groupId}`,
+    () =>
+      client.pupPage.evaluate((id) => {
+        const wid = window.require("WAWebWidFactory").createWid(id);
+        const chat = window.require("WAWebCollections").Chat.get(wid);
+        return (chat && (chat.formattedTitle || chat.name || (chat.groupMetadata && chat.groupMetadata.subject))) || null;
+      }, groupId),
+    10000
+  );
+}
+
+// بيدوّر على مجموعة موجودة بالفعل بنفس الاسم بالظبط - بديل لـclient.getChats() (نفس علة "r").
+// بيقرا كل الشاتات من داخل واتساب ويب مباشرة ويرجّع معرّف أول مجموعة بنفس الاسم، أو null
+async function findGroupByName(groupName) {
+  return boundedCall(
+    `find-group-${groupName}`,
+    () =>
+      client.pupPage.evaluate((name) => {
+        const chats = window.require("WAWebCollections").Chat.getModelsArray();
+        const match = chats.find((c) => c.isGroup && (c.formattedTitle === name || c.name === name));
+        return match ? match.id._serialized || match.id.$1 : null;
+      }, groupName),
+    15000
+  );
 }
 
 // بيعالج رسالة مزارع واحدة فعليًا (آخر رسالة في أي مجموعة رسائل متتالية بعد ما تهدى - شوف الـdebounce تحت)
@@ -1670,10 +1694,9 @@ async function handleControlCommand(msg) {
           // مكتبة واتساب أحيانًا بترمي خطأ قراءة الرد (findImpl/unknown error) حتى لو المجموعة
           // اتعملت فعليًا على السيرفر - قبل أي محاولة إنشاء جديدة، نتأكد الأول إن مفيش مجموعة
           // بنفس الاسم اتعملت من محاولة سابقة فشلت في الرد بس (تفاديًا لتكرار الإنشاء)
-          const existingChats = await boundedCall(`chats-${region.key}`, () => client.getChats(), 15000);
-          const existingGroup = (existingChats || []).find((c) => c.isGroup && c.name === groupName);
-          if (existingGroup) {
-            deliveryStore.setGroup(region.key, existingGroup.id._serialized);
+          const existingGroupId = await findGroupByName(groupName);
+          if (existingGroupId) {
+            deliveryStore.setGroup(region.key, existingGroupId);
             results.push(`✅ ${region.ar}: اتلاقت مجموعة موجودة بنفس الاسم من محاولة سابقة واتربطت (من غير إنشاء مجموعة جديدة)`);
             continue;
           }
