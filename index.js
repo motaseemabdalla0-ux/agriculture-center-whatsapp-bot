@@ -704,18 +704,19 @@ function startGitAutoUpdateWatcher() {
   }, GIT_AUTO_UPDATE_INTERVAL_MS);
 }
 
-// لو البوت رجع يشتغل بسبب تحديث GitHub تلقائي (ملف التنبيه موجود من قبل القفلة)، نبلّغ الأدمن
-// دلوقتي إن التحديث خلص ونجح، وبعدين نمسح الملف عشان منبلّغش تاني المرة الجاية اللي يشتغل فيها عادي
+// لو البوت رجع يشتغل بسبب تحديث GitHub تلقائي (ملف التنبيه موجود من قبل القفلة)، بنسجّل النجاح
+// في اللوج بس (بطلب من الإدارة - مفيش داعي لرسالة واتساب لكل تحديث ناجح، غير الفشل اللي
+// لسه بيتبعت تنبيه عليه لأنه بيحتاج مراجعة فعلية) ونمسح الملف عشان منعالجوش تاني
 async function notifyGitUpdateIfPending() {
   if (!fs.existsSync(GIT_UPDATE_NOTICE_FILE)) return;
   try {
     const info = JSON.parse(fs.readFileSync(GIT_UPDATE_NOTICE_FILE, "utf8"));
     fs.unlinkSync(GIT_UPDATE_NOTICE_FILE);
-    await notifyAdmins(
-      `✅ تحديث GitHub تلقائي نجح (${info.fromHash.slice(0, 7)} -> ${info.toHash.slice(0, 7)})${info.ranInstall ? " - شمل npm install لتغيّر في الاعتماديات" : ""}.\n\nالبوت شغّال دلوقتي بالكود الجديد ومتصل بواتساب.`
+    console.log(
+      `✅ [تحديث GitHub تلقائي] نجح (${info.fromHash.slice(0, 7)} -> ${info.toHash.slice(0, 7)})${info.ranInstall ? " - شمل npm install" : ""} - البوت شغّال بالكود الجديد ومتصل بواتساب.`
     );
   } catch (err) {
-    console.log(`⚠️ فشل إرسال تنبيه اكتمال تحديث GitHub: ${err.message}`);
+    console.log(`⚠️ فشل معالجة ملف تنبيه اكتمال تحديث GitHub: ${err.message}`);
   }
 }
 
