@@ -2,7 +2,7 @@ console.log(`🚀 [بدء] السكريبت بدأ التنفيذ - ${new Date()
 
 const fs = require("fs");
 const path = require("path");
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client, LocalAuth, List } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cfg = require("./config");
 const { runBroadcast } = require("./lib/broadcastRunner");
@@ -1993,6 +1993,39 @@ async function handleControlCommand(msg) {
         }
       } catch (err) {
         await msg.reply(`⚠️ تعذّر جلب القائمة: ${err.message}`);
+      }
+      return;
+    }
+
+    // تجربة معزولة تمامًا لرسالة "قائمة تفاعلية" (زي قوائم أمازون/الشركات على واتساب بيزنس) -
+    // "اختبار قائمة 966XXXXXXXXX". مفيش أي لمس للقائمة الرئيسية العادية للمزارعين - رسالة اختبار
+    // لرقم واحد بس بيحدده المدير، عشان نتأكد هل واتساب بيقبلها فعليًا على الحساب ده (مش مضمون -
+    // القوائم التفاعلية دي جزء من واتساب بيزنس الرسمي، ومش مضمون تشتغل عبر whatsapp-web.js على
+    // حساب شخصي عادي) قبل ما نفكّر نستخدمها في أي حاجة حقيقية
+    const listTestMatch = toWesternDigits(text).match(/^اختبار\s*قائمة\s+(\d{8,15})$/i);
+    if (listTestMatch) {
+      const targetPhone = normalizeSaudiPhone(listTestMatch[1]);
+      try {
+        const list = new List(
+          "يرجى اختيار الخدمة المطلوبة:",
+          "القائمة",
+          [
+            {
+              title: "الخدمات",
+              rows: [
+                { id: "1", title: "التسجيل في بطاقة المزرعة" },
+                { id: "2", title: "التواصل مع موظف علاقات المزارعين" },
+                { id: "3", title: "الاقتراحات والشكاوى" },
+              ],
+            },
+          ],
+          "مركز الزراعة",
+          "رسالة اختبار - تجاهلها لو وصلتك بالغلط"
+        );
+        await boundedCall("list-test-send", () => client.sendMessage(`${targetPhone}@c.us`, list), 15000);
+        await msg.reply(`⏳ اتبعتت رسالة القائمة التجريبية لـ ${targetPhone}. تابع مع صاحب الرقم هل ظهرتله كقائمة تفاعلية فعلًا ولا نص عادي/ما وصلتش.`);
+      } catch (err) {
+        await msg.reply(`❌ فشل إرسال القائمة التجريبية: ${err.message}`);
       }
       return;
     }
