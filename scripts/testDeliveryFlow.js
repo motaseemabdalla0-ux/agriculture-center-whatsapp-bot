@@ -40,6 +40,7 @@ const TEXTS = {
   DELIVERY_LOCATION_UNKNOWN: "LOCATION_UNKNOWN",
   DELIVERY_ASK_DATETIME: "ASK_DATETIME",
   DELIVERY_REMINDER_DATETIME: "REMIND_DATETIME",
+  DELIVERY_REGION_CORRECTED: "REGION_CORRECTED {region}",
   DELIVERY_THANKS: "THANKS {region}",
 };
 const getText = (k) => TEXTS[k];
@@ -95,6 +96,23 @@ async function run() {
   check("4ط: رقم يدوي 3 = الوسط -> ينتقل لخطوة اليوم/الوقت، مفيش تحديد تلقائي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502333333").regionKey === "CENTER" && store.getPending("966502333333").autoDetected === false && store.getPending("966502333333").district === null);
   r = flow.handleReply("966502333333", "غدًا مساءً", getText);
   check("4ي: الطلب اتسجّل بالمنطقة اليدوية (autoDetected=false)", r.request && r.request.regionKey === "CENTER" && r.request.autoDetected === false);
+
+  console.log("\n=== 4ن) تصحيح المنطقة تلقائيًا لو المزارع بعت موقع فعلي بعد ما اختار رقم يدوي غلط ===");
+  store.markAwaitingChoice("966502444444", "فيصل");
+  flow.handleReply("966502444444", "2", getText);
+  r = flow.handleReply("966502444444", "1", getText); // اختار الشمال يدويًا
+  check("4س: اختار الشمال يدويًا -> ASK_DATETIME", r.reply === "ASK_DATETIME" && store.getPending("966502444444").regionKey === "NORTH" && store.getPending("966502444444").autoDetected === false);
+  // لكن موقعه الفعلي (Al Ibriq) في الجنوب فعليًا - المفروض يصحح المنطقة تلقائيًا
+  r = flow.handleLocation("966502444444", 25.7152, 38.6513, getText);
+  check("4ع: موقع فعلي مختلف عن الاختيار اليدوي -> تصحيح تلقائي للمنطقة الصح (الجنوب) وفضل في خطوة اليوم/الوقت", r.handled && !r.request && r.reply === "REGION_CORRECTED الجنوب" && store.getPending("966502444444").step === "DATETIME" && store.getPending("966502444444").regionKey === "SOUTH" && store.getPending("966502444444").autoDetected === true && store.getPending("966502444444").district === "Al Ibriq");
+  r = flow.handleReply("966502444444", "الثلاثاء ظهرًا", getText);
+  check("4ف: الطلب النهائي اتسجّل بالمنطقة المصحَّحة (الجنوب) مش المنطقة اليدوية الأصلية (الشمال)", r.request && r.request.regionKey === "SOUTH" && r.request.autoDetected === true);
+  // موقع تاني بعد ما المنطقة اتصححت بالفعل ونفس المنطقة (الجنوب) - مفيش "تصحيح" يتقال، رد عادي
+  store.markAwaitingChoice("966502555555", "هند");
+  flow.handleReply("966502555555", "2", getText);
+  flow.handleLocation("966502555555", 25.7152, 38.6513, getText); // الجنوب تلقائيًا من الأول
+  r = flow.handleLocation("966502555555", 25.7152, 38.6513, getText); // نفس الموقع تاني في خطوة DATETIME
+  check("4ص: موقع تاني بنفس المنطقة (مفيش تغيير فعلي) -> رد عادي (ASK_DATETIME) مش رسالة تصحيح", r.reply === "ASK_DATETIME");
 
   console.log("\n=== 4ك) clearGroups بيشيل الربط الثلاثة كلهم دفعة واحدة (لأمر تفكيك مجموعات التوصيل) ===");
   store.setGroup("NORTH", "999@g.us");
