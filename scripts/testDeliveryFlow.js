@@ -181,6 +181,12 @@ async function run() {
   sentTracker.markSent("card_pickup", "966510000003");
   check("10هـ: getSentList بترجع كل الأرقام المسجّلة لنوع معيّن", sentTracker.getSentList("card_pickup").includes("966510000003") && sentTracker.getSentList("nonexistent_type").length === 0);
 
+  console.log("\n=== 11) groupNameMatchesRegion (التحقق من اسم مجموعة التوصيل مقابل منطقتها) ===");
+  check("11: اسم فيه كلمة المنطقة (من غير أداة التعريف) -> مطابق", store.groupNameMatchesRegion("NORTH", "توصيل بطاقات - الشمال") === true);
+  check("11ب: اسم منطقة تانية تمامًا -> مش مطابق", store.groupNameMatchesRegion("NORTH", "توصيل بطاقات - الجنوب") === false);
+  check("11ج: اسم عام بدون ذكر أي منطقة -> مش مطابق", store.groupNameMatchesRegion("CENTER", "مجموعة الفريق") === false);
+  check("11د: منطقة غير معروفة أو اسم فاضي -> false من غير كراش", store.groupNameMatchesRegion("UNKNOWN", "أي اسم") === false && store.groupNameMatchesRegion("NORTH", "") === false);
+
   console.log(`\n🎉 كل اختبارات حوار الاستلام/التوصيل نجحت (${passed} اختبار). صفر رسائل واتساب حقيقية.`);
 }
 

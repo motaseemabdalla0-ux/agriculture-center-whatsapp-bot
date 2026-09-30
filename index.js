@@ -929,8 +929,30 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   const regionKey = deliveryStore.REGION_BY_WORD[m[1]];
   deliveryStore.setGroup(regionKey, groupId);
   console.log(`✅ [ربط مجموعة] تم ربط ${groupId} بمنطقة ${m[1]}.`);
-  await safeReply(msg, `✅ تم ربط هذه المجموعة بطلبات توصيل منطقة ${m[1]}.`);
+
+  // تحقق بسيط: اسم المجموعة الفعلي بيذكر اسم المنطقة دي؟ (يلاقط غلطة ربط مجموعة غلط بدري -
+  // زي ربط مجموعة اسمها "توصيل بطاقات - الجنوب" غلط بمنطقة الشمال) - تحذير بس، مش رفض للربط،
+  // لأن أسماء المجموعات ممكن تتغيّر لاحقًا أو تتكتب بصياغة مختلفة عن قصد
+  let nameWarning = "";
+  try {
+    const groupName = await fetchGroupName(groupId);
+    if (groupName && !deliveryStore.groupNameMatchesRegion(regionKey, groupName)) {
+      nameWarning = `\n\n⚠️ تنبيه: اسم المجموعة الفعلي "${groupName}" ما بيذكرش "${m[1].replace(/^ال/, "")}" - تأكد إنك ربطت المجموعة الصح.`;
+    }
+  } catch (err) {
+    console.log(`⚠️ [ربط مجموعة] تعذّر التأكد من اسم المجموعة: ${err.message}`);
+  }
+
+  await safeReply(msg, `✅ تم ربط هذه المجموعة بطلبات توصيل منطقة ${m[1]}.${nameWarning}`);
   return true;
+}
+
+// اسم مجموعة واتساب من معرّفها - بيدوّر جوّه قائمة الشاتات (client.getChats() بمهلة، نفس أسلوب
+// فحص المجموعات المكررة في "انشاء مجموعات التوصيل") - بيرجّع null لو تعذّر الوصول لأي سبب
+async function fetchGroupName(groupId) {
+  const chats = await boundedCall(`group-name-${groupId}`, () => client.getChats(), 15000);
+  const chat = (chats || []).find((c) => c.isGroup && c.id && c.id._serialized === groupId);
+  return chat ? chat.name : null;
 }
 
 // بيعالج رسالة مزارع واحدة فعليًا (آخر رسالة في أي مجموعة رسائل متتالية بعد ما تهدى - شوف الـdebounce تحت)
@@ -1723,6 +1745,36 @@ async function handleControlCommand(msg) {
       await msg.reply(`🚚 مجموعات التوصيل:\n\n${lines.join("\n")}\n\nللربط: اكتب داخل المجموعة "ربط مجموعة الشمال" (أو الجنوب/الوسط).`);
       return;
     }
+    // بيتأكد إن اسم كل مجموعة توصيل مربوطة فعليًا بيذكر اسم منطقتها - يلاقط غلطة ربط مجموعة
+    // بمنطقة غلط (زي مجموعة اسمها "الجنوب" اتربطت غلط بمنطقة الشمال) من غير ما نستنى مشكلة حقيقية
+    // (طلب توصيل يوصل لمجموعة غلط) عشان نكتشفها
+    if (/^تحقق\s*مجموعات\s*التوصيل$/i.test(text)) {
+      const groups = deliveryStore.getGroups();
+      const linkedRegions = Object.values(deliveryStore.REGIONS).filter((r) => groups[r.key]);
+      if (linkedRegions.length === 0) {
+        await msg.reply('⚠️ مفيش أي مجموعة مربوطة أصلًا. اكتب "مجموعات التوصيل" لمعرفة الحالة.');
+        return;
+      }
+      await msg.reply(`⏳ جاري التحقق من أسماء ${linkedRegions.length} مجموعة مربوطة...`);
+      const results = [];
+      for (const region of linkedRegions) {
+        try {
+          const groupName = await fetchGroupName(groups[region.key]);
+          if (!groupName) {
+            results.push(`❓ ${region.ar}: تعذّر جلب اسم المجموعة (ممكن تكون اتحذفت أو البوت اتشال منها)`);
+          } else if (deliveryStore.groupNameMatchesRegion(region.key, groupName)) {
+            results.push(`✅ ${region.ar}: "${groupName}" - الاسم مطابق`);
+          } else {
+            results.push(`⚠️ ${region.ar}: "${groupName}" - الاسم ما بيذكرش "${region.ar.replace(/^ال/, "")}"، تأكد من الربط`);
+          }
+        } catch (err) {
+          results.push(`❓ ${region.ar}: تعذّر التحقق (${err.message})`);
+        }
+      }
+      await msg.reply(`🔎 نتيجة التحقق من أسماء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      return;
+    }
+
     if (/^طلبات\s*التوصيل$/i.test(text)) {
       const open = deliveryStore.listOpenRequests();
       if (open.length === 0) {
