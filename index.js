@@ -2031,6 +2031,21 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // تجربة معزولة للشكل الجديد المقترح للقائمة الرئيسية (نص عادي منسّق زي رسائل الشركات) -
+    // "اختبار القائمة الجديدة 966XXXXXXXXX". بيبعت نص MAIN_MENU_PREVIEW لرقم واحد بس، من غير أي
+    // تأثير على القائمة الحقيقية للمزارعين العاديين لحد ما تُعتمد فعليًا (باستبدال MAIN_MENU نفسها)
+    const menuPreviewMatch = toWesternDigits(text).match(/^اختبار\s*القائمة\s*الجديدة\s+(\d{8,15})$/i);
+    if (menuPreviewMatch) {
+      const targetPhone = normalizeSaudiPhone(menuPreviewMatch[1]);
+      try {
+        await boundedCall("menu-preview-send", () => client.sendMessage(`${targetPhone}@c.us`, getCfgText("MAIN_MENU_PREVIEW")), 15000);
+        await msg.reply(`⏳ اتبعت الشكل الجديد المقترح للقائمة لـ ${targetPhone} - ده معاينة بس، مفيش أي تأثير على القائمة الحقيقية.`);
+      } catch (err) {
+        await msg.reply(`❌ فشل إرسال المعاينة: ${err.message}`);
+      }
+      return;
+    }
+
     // إضافة/حذف رقم يستقبل التقرير اليومي ويقدر يطلبه: "اضف مدير 966501234567"
     // بيقبل إما رقم عادي (966...) أو معرّف واتساب كامل بصيغة @lid - مفيد لما رقم مدير معيّن بيوصل
     // بصيغة @lid (مشكلة معروفة في بعض الحسابات) ومينفعش نتعرف عليه من رقمه العادي. تقدر تاخد
