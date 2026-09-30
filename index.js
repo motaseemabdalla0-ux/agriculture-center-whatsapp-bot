@@ -979,6 +979,62 @@ async function findGroupByName(groupName) {
   );
 }
 
+// كل مجموعات واتساب اللي البوت عضو فيها حاليًا - قراءة مباشرة من داخل واتساب ويب (نفس أسلوب
+// findGroupByName) بدل client.getChats() المكسورة. بيرجّع [{id, name}]
+async function listBotGroups() {
+  return boundedCall(
+    "list-bot-groups",
+    () =>
+      client.pupPage.evaluate(() => {
+        const chats = window.require("WAWebCollections").Chat.getModelsArray();
+        return chats
+          .filter((c) => c.isGroup)
+          .map((c) => ({ id: c.id._serialized || c.id.$1, name: c.formattedTitle || c.name || "(بدون اسم)" }));
+      }),
+    15000
+  );
+}
+
+// بيغيّر عنوان مجموعة مباشرة (نفس منطق GroupChat.setSubject بالظبط، بس من غير الاعتماد على
+// client.getChatById المكسورة حاليًا - بيمرّر chatId كنص مباشرة). بيرجّع true/false حسب النجاح
+async function renameGroup(chatId, subject) {
+  return boundedCall(
+    `rename-group-${chatId}`,
+    () =>
+      client.pupPage.evaluate(
+        async (id, newSubject) => {
+          const wid = window.require("WAWebWidFactory").createWid(id);
+          try {
+            await window.require("WAWebGroupModifyInfoJob").setGroupSubject(wid, newSubject);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        chatId,
+        subject
+      ),
+    15000
+  );
+}
+
+// البوت يغادر مجموعة (نفس منطق GroupChat.leave() بالظبط، بدون الاعتماد على getChatById المكسورة)
+async function leaveGroup(chatId) {
+  return boundedCall(
+    `leave-group-${chatId}`,
+    () =>
+      client.pupPage.evaluate(async (id) => {
+        const chat = await window.WWebJS.getChat(id, { getAsModel: false });
+        return window.require("WAWebExitGroupAction").sendExitGroup(chat);
+      }, chatId),
+    15000
+  );
+}
+
+// آخر قائمة مجموعات اتعرضت بأمر "مجموعات البوت" - عشان أمر "غادر مجموعة <رقم>" يقدر يرجع لنفس
+// الترتيب من غير ما المدير يضطر يكتب معرّف المجموعة الطويل بنفسه
+let lastGroupListing = [];
+
 // بيعالج رسالة مزارع واحدة فعليًا (آخر رسالة في أي مجموعة رسائل متتالية بعد ما تهدى - شوف الـdebounce تحت)
 async function processFarmerMessage(msg) {
   // بنستخدم المعرّف الموحّد (رقم الهاتف الحقيقي لو اتترجم من @lid) بدل msg.from الخام - عشان
@@ -1795,6 +1851,88 @@ async function handleControlCommand(msg) {
         }
       }
       await msg.reply(`🔎 نتيجة التحقق من أسماء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      return;
+    }
+
+    // بيعرض كل مجموعات واتساب اللي البوت عضو فيها حاليًا (مش بس مجموعات التوصيل المربوطة) -
+    // مفيد لاكتشاف مجموعات مكررة أو زيادة عن الحاجة، ولازم قبل أمر "غادر مجموعة <رقم>"
+    if (/^مجموعات\s*البوت$/i.test(text)) {
+      try {
+        const groups = await listBotGroups();
+        if (!groups || groups.length === 0) {
+          await msg.reply("📭 البوت مش عضو في أي مجموعة حاليًا.");
+          return;
+        }
+        lastGroupListing = groups;
+        const linked = deliveryStore.getGroups();
+        const lines = groups.map((g, i) => {
+          const linkedRegion = Object.values(deliveryStore.REGIONS).find((r) => linked[r.key] === g.id);
+          return `${i + 1}. ${g.name}${linkedRegion ? ` (مربوطة بمنطقة ${linkedRegion.ar} ✅)` : ""}`;
+        });
+        await msg.reply(`👥 مجموعات البوت (${groups.length}):\n\n${lines.join("\n")}\n\nلمغادرة مجموعة غير محتاجها، اكتب: غادر مجموعة <رقمها من القائمة دي>`);
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر جلب قائمة المجموعات: ${err.message}`);
+      }
+      return;
+    }
+
+    // بيصحّح اسم أي مجموعة توصيل مربوطة اسمها الفعلي مش مطابق لمنطقتها (زي المجموعات المكررة
+    // اللي أسماؤها اتلخبطت وقت الإنشاء) - بيغيّر الاسم للصيغة القياسية "توصيل بطاقات - <المنطقة>"
+    if (/^صحح\s*اسماء\s*مجموعات\s*التوصيل$/i.test(text)) {
+      const groups = deliveryStore.getGroups();
+      const linkedRegions = Object.values(deliveryStore.REGIONS).filter((r) => groups[r.key]);
+      if (linkedRegions.length === 0) {
+        await msg.reply('⚠️ مفيش أي مجموعة مربوطة أصلًا. اكتب "مجموعات التوصيل" لمعرفة الحالة.');
+        return;
+      }
+      await msg.reply(`⏳ جاري مراجعة وتصحيح أسماء ${linkedRegions.length} مجموعة مربوطة...`);
+      const results = [];
+      for (const region of linkedRegions) {
+        const canonicalName = `توصيل بطاقات - ${region.ar}`;
+        try {
+          const currentName = await fetchGroupName(groups[region.key]);
+          if (currentName === canonicalName) {
+            results.push(`✅ ${region.ar}: الاسم سليم بالفعل ("${currentName}")`);
+            continue;
+          }
+          const ok = await renameGroup(groups[region.key], canonicalName);
+          results.push(
+            ok
+              ? `✅ ${region.ar}: اتغيّر الاسم من "${currentName || "؟"}" لـ "${canonicalName}"`
+              : `❌ ${region.ar}: فشل تغيير الاسم (ممكن البوت مش أدمن في المجموعة دي)`
+          );
+        } catch (err) {
+          results.push(`❌ ${region.ar}: ${err.message}`);
+        }
+      }
+      await msg.reply(`✏️ نتيجة تصحيح أسماء مجموعات التوصيل:\n\n${results.join("\n")}`);
+      return;
+    }
+
+    // بيخلي البوت يغادر مجموعة معيّنة برقمها من آخر قائمة "مجموعات البوت" - مش بيحذف المجموعة
+    // نفسها من واتساب (ده مستحيل تقنيًا من عضو عادي)، بس بيشيل البوت منها. لازم "مجموعات البوت"
+    // الأول عشان الأرقام تتحدد صح، ومينفعش تتخمّن من غير القائمة دي
+    const leaveGroupMatch = toWesternDigits(text).match(/^غادر\s*مجموعة\s+(\d+)$/i);
+    if (leaveGroupMatch) {
+      const index = parseInt(leaveGroupMatch[1], 10) - 1;
+      if (lastGroupListing.length === 0) {
+        await msg.reply('⚠️ اكتب "مجموعات البوت" الأول عشان تعرف رقم المجموعة اللي عايز تغادرها.');
+        return;
+      }
+      const target = lastGroupListing[index];
+      if (!target) {
+        await msg.reply(`⚠️ رقم غير صحيح. القائمة فيها ${lastGroupListing.length} مجموعة بس.`);
+        return;
+      }
+      // لو المجموعة دي مربوطة بمنطقة توصيل، لازم نفكّها الأول عشان منسيبش طلبات توصيل تروح لمجموعة البوت غادرها
+      const linkedRegion = Object.values(deliveryStore.REGIONS).find((r) => deliveryStore.getGroups()[r.key] === target.id);
+      try {
+        await leaveGroup(target.id);
+        if (linkedRegion) deliveryStore.setGroup(linkedRegion.key, null);
+        await msg.reply(`✅ غادر البوت مجموعة "${target.name}"${linkedRegion ? ` (وكانت مربوطة بمنطقة ${linkedRegion.ar} - اتفكّ الربط تلقائيًا)` : ""}.`);
+      } catch (err) {
+        await msg.reply(`❌ فشلت مغادرة المجموعة: ${err.message}`);
+      }
       return;
     }
 
