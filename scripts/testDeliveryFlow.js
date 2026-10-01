@@ -87,21 +87,26 @@ async function run() {
   check("4و: حالة الانتظار اتمسحت بعد الطلب", store.getPending("966502222222") === null);
   const khaledRequest = r.request;
 
-  console.log("\n=== 4ز) رقم منطقة يدوي (fallback) لمزارع تاني - لو مبعتش موقع أصلًا ===");
+  console.log("\n=== 4ز) الموقع إلزامي - رقم منطقة (حتى لو صحيح شكليًا) بيترفض قبل أي محاولة موقع ===");
   store.markAwaitingChoice("966502333333", "منصور");
   flow.handleReply("966502333333", "2", getText);
-  r = flow.handleReply("966502333333", "9", getText);
-  check("4ح: منطقة غير صحيحة -> تذكير بالخيار (موقع أو رقم)", r.reply === "REMIND_REGION" && !r.request);
+  r = flow.handleReply("966502333333", "3", getText); // رقم منطقة صحيح شكليًا، بس قبل أي محاولة موقع خالص
+  check("4ح: رقم منطقة قبل أي محاولة موقع -> يترفض ويتذكّر بإرسال الموقع، مش بيتقبل كبديل", r.reply === "REMIND_REGION" && !r.request && store.getPending("966502333333").step === "REGION" && !store.getPending("966502333333").locationFailed);
+  r = flow.handleLocation("966502333333", 22.0, 39.0, getText); // موقع فعلي برّه كل المناطق المعروفة -> فشل تصنيف
+  check("4ط: فشل تصنيف موقع فعلي -> دلوقتي رقم يدوي بقى مقبول كـfallback", r.reply === "LOCATION_UNKNOWN" && store.getPending("966502333333").locationFailed === true);
+  r = flow.handleReply("966502333333", "9", getText); // رقم غير صحيح
+  check("4ي: رقم غير صحيح بعد فشل الموقع -> تذكير بالمناطق (LOCATION_UNKNOWN) تاني", r.reply === "LOCATION_UNKNOWN" && !r.request);
   r = flow.handleReply("966502333333", "3", getText);
-  check("4ط: رقم يدوي 3 = الوسط -> ينتقل لخطوة اليوم/الوقت، مفيش تحديد تلقائي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502333333").regionKey === "CENTER" && store.getPending("966502333333").autoDetected === false && store.getPending("966502333333").district === null);
+  check("4ك: رقم يدوي 3 = الوسط بعد فشل الموقع -> ينتقل لخطوة اليوم/الوقت، مفيش تحديد تلقائي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502333333").regionKey === "CENTER" && store.getPending("966502333333").autoDetected === false && store.getPending("966502333333").district === null);
   r = flow.handleReply("966502333333", "غدًا مساءً", getText);
-  check("4ي: الطلب اتسجّل بالمنطقة اليدوية (autoDetected=false)", r.request && r.request.regionKey === "CENTER" && r.request.autoDetected === false);
+  check("4ل: الطلب اتسجّل بالمنطقة اليدوية (autoDetected=false)", r.request && r.request.regionKey === "CENTER" && r.request.autoDetected === false);
 
-  console.log("\n=== 4ن) تصحيح المنطقة تلقائيًا لو المزارع بعت موقع فعلي بعد ما اختار رقم يدوي غلط ===");
+  console.log("\n=== 4ن) تصحيح المنطقة تلقائيًا لو موقع لاحق مختلف عن الاختيار اليدوي (بعد fallback) ===");
   store.markAwaitingChoice("966502444444", "فيصل");
   flow.handleReply("966502444444", "2", getText);
-  r = flow.handleReply("966502444444", "1", getText); // اختار الشمال يدويًا
-  check("4س: اختار الشمال يدويًا -> ASK_DATETIME", r.reply === "ASK_DATETIME" && store.getPending("966502444444").regionKey === "NORTH" && store.getPending("966502444444").autoDetected === false);
+  flow.handleLocation("966502444444", 22.0, 39.0, getText); // فشل موقع الأول - بيفتح الـfallback اليدوي
+  r = flow.handleReply("966502444444", "1", getText); // اختار الشمال يدويًا (fallback)
+  check("4س: اختار الشمال يدويًا بعد فشل الموقع -> ASK_DATETIME", r.reply === "ASK_DATETIME" && store.getPending("966502444444").regionKey === "NORTH" && store.getPending("966502444444").autoDetected === false);
   // لكن موقعه الفعلي (Al Ibriq) في الجنوب فعليًا - المفروض يصحح المنطقة تلقائيًا
   r = flow.handleLocation("966502444444", 25.7152, 38.6513, getText);
   check("4ع: موقع فعلي مختلف عن الاختيار اليدوي -> تصحيح تلقائي للمنطقة الصح (الجنوب) وفضل في خطوة اليوم/الوقت", r.handled && !r.request && r.reply === "REGION_CORRECTED الجنوب" && store.getPending("966502444444").step === "DATETIME" && store.getPending("966502444444").regionKey === "SOUTH" && store.getPending("966502444444").autoDetected === true && store.getPending("966502444444").district === "Al Ibriq");
@@ -152,6 +157,7 @@ async function run() {
   if (fs.existsSync(path.join(ROOT, "delivery_state.json.bak"))) fs.unlinkSync(path.join(ROOT, "delivery_state.json.bak"));
   store.markAwaitingChoice("966504444444", "ماجد");
   flow.handleReply("966504444444", "2", getText);
+  flow.handleLocation("966504444444", 22.0, 39.0, getText); // فشل الموقع الأول - بيفتح الـfallback اليدوي
   flow.handleReply("966504444444", "3", getText);
   const r4 = flow.handleReply("966504444444", "الخميس بعد الظهر", getText);
   const noSend = [];
