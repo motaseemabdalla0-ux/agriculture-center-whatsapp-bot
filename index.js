@@ -22,6 +22,7 @@ const {
   todayStr,
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
+const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
 const sentEcho = require("./lib/sentEcho");
@@ -200,6 +201,9 @@ const REPORT_HOUR = 20; // الساعة اللي بيتبعت فيها التق�
 let lastReportSentDate = null;
 const PENDING_REMINDER_INTERVAL_MS = 4 * 60 * 60 * 1000; // كل 4 ساعات - بطلب صريح من الإدارة
 let lastPendingReminderAt = 0;
+
+const DELIVERY_REPORT_HOUR = 10; // تقرير طلبات التوصيل اليومي بيتبعت الساعة 10 صباحًا (بتوقيت الجهاز)
+let lastDeliveryReportSentDate = null;
 
 const TRIGGER_FILE = path.join(__dirname, "SEND_NOW.txt");
 const REGISTRATION_TRIGGER_FILE = path.join(__dirname, "SEND_REGISTRATION_STATUS.txt");
@@ -820,6 +824,7 @@ function watchForTriggers() {
 
     await maybeSyncPortal();
     await maybeSendPendingItemsReminder();
+    await maybeSendDeliveryDailyReport();
     // ملحوظة: التقرير التلقائي متوقف بطلب الإدارة - المديرين هم اللي بيطلبوه يدويًا بكتابة "تقرير"
     // (الدالة maybeSendDailyReport باقية تحت من غير استدعاء، لو حبينا نرجّعها تاني في المستقبل)
   }, 2000);
@@ -841,6 +846,34 @@ async function maybeSendPendingItemsReminder() {
     console.log(`🔔 اتبعت تذكير الحالات المعلّقة تلقائيًا لـ"رسائلي" (${totalPending} حالة معلّقة).`);
   } catch (err) {
     console.log(`⚠️ فشل إرسال تذكير المعلّقات التلقائي: ${err.message}`);
+  }
+}
+
+// بيبعت تقرير طلبات التوصيل المفتوحة (مقسّم شمال/جنوب/وسط) تلقائيًا كل يوم الساعة
+// DELIVERY_REPORT_HOUR لأي رقم مسجّل بأمر "اضف رقم تقرير التوصيل" - بطلب صريح من الإدارة
+async function maybeSendDeliveryDailyReport() {
+  const now = new Date();
+  const today = todayStr(now);
+  if (lastDeliveryReportSentDate === today) return;
+  if (now.getHours() < DELIVERY_REPORT_HOUR) return;
+  lastDeliveryReportSentDate = today;
+
+  const recipients = deliveryStore.getReportRecipients();
+  if (recipients.length === 0) return;
+
+  try {
+    const data = buildDeliveryDailyReport();
+    const text = formatDeliveryDailyReport(data);
+    for (const phone of recipients) {
+      try {
+        await client.sendMessage(`${phone}@c.us`, text);
+      } catch (err) {
+        console.log(`⚠️ فشل إرسال تقرير التوصيل اليومي لـ ${phone}: ${err.message}`);
+      }
+    }
+    console.log(`🚚 اتبعت تقرير طلبات التوصيل اليومي لـ ${recipients.length} رقم (${data.total} طلب مفتوح).`);
+  } catch (err) {
+    console.log(`⚠️ فشل تجهيز تقرير التوصيل اليومي: ${err.message}`);
   }
 }
 
@@ -2293,6 +2326,38 @@ async function handleControlCommand(msg) {
       await msg.reply(
         removed ? `✅ تم حذف ${phone} من مستقبلي التقرير.` : `ℹ️ الرقم ${phone} مش موجود أصلًا.`
       );
+      return;
+    }
+
+    // إضافة/حذف رقم يستقبل تقرير طلبات التوصيل اليومي (مقسّم شمال/جنوب/وسط) الساعة 10 صباحًا -
+    // منفصل تمامًا عن "اضف مدير" (ده تقرير النشاط العام، ده تقرير التوصيل بس)
+    const addDeliveryReportMatch = toWesternDigits(text).match(/^اضف\s*رقم\s*تقرير\s*التوصيل\s+(\d{8,15}(?:@lid)?)$/i);
+    if (addDeliveryReportMatch) {
+      const phone = addDeliveryReportMatch[1];
+      const added = deliveryStore.addReportRecipient(phone);
+      await msg.reply(added ? `✅ تمت إضافة ${phone} كمستقبل لتقرير طلبات التوصيل اليومي (الساعة 10 صباحًا).` : `ℹ️ الرقم ${phone} مضاف بالفعل.`);
+      return;
+    }
+
+    const removeDeliveryReportMatch = toWesternDigits(text).match(/^احذف\s*رقم\s*تقرير\s*التوصيل\s+(\d{8,15}(?:@lid)?)$/i);
+    if (removeDeliveryReportMatch) {
+      const phone = removeDeliveryReportMatch[1];
+      const removed = deliveryStore.removeReportRecipient(phone);
+      await msg.reply(removed ? `✅ تم حذف ${phone} من مستقبلي تقرير التوصيل.` : `ℹ️ الرقم ${phone} مش موجود أصلًا.`);
+      return;
+    }
+
+    if (/^ارقام\s*تقرير\s*التوصيل$/i.test(text)) {
+      const list = deliveryStore.getReportRecipients();
+      await msg.reply(`📋 مستقبلو تقرير طلبات التوصيل اليومي (10 صباحًا):\n\n${list.length ? list.join("\n") : "لا يوجد"}`);
+      return;
+    }
+
+    // تشغيل فوري لتقرير طلبات التوصيل (من غير استنى الساعة 10 صباحًا) - بيتبعت لنفس المحادثة
+    // اللي طلبته، مش لقائمة المستقبلين المسجّلين (عشان تقدر تعاين الشكل بسرعة)
+    if (/^تقرير\s*التوصيل$/i.test(text)) {
+      const data = buildDeliveryDailyReport();
+      await msg.reply(formatDeliveryDailyReport(data));
       return;
     }
 
