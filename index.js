@@ -2153,8 +2153,19 @@ async function handleControlCommand(msg) {
         await msg.reply(`📭 مفيش أي رسائل من نوع "${requestedLabel}" مسجّلة.${hint}`);
         return;
       }
-      const lines = [`👥 المزارعين اللي اتبعتلهم "${matchedLabel}" (${rows.length}):\n`];
-      rows.forEach((e) => lines.push(`• ${e.name || "بدون اسم"} (${e.phone})`));
+      // مقسّمة حسب تاريخ الإرسال (ترتيب تصاعدي) - بدل قائمة واحدة مسطّحة، عشان تعرف كل دفعة
+      // اتبعتت إمتى بالظبط لو الإرسال كان على أكتر من يوم
+      const byDate = {};
+      rows.forEach((e) => {
+        if (!byDate[e.date]) byDate[e.date] = [];
+        byDate[e.date].push(e);
+      });
+      const dates = Object.keys(byDate).sort();
+      const lines = [`👥 المزارعين اللي اتبعتلهم "${matchedLabel}" (${rows.length}):`];
+      dates.forEach((date) => {
+        lines.push(`\n📅 ${date} (${byDate[date].length}):`);
+        byDate[date].forEach((e) => lines.push(`• ${e.name || "بدون اسم"} (${e.phone})`));
+      });
       await msg.reply(lines.join("\n"));
       return;
     }
