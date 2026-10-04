@@ -33,6 +33,7 @@ try {
   const req = { id: "D-9", name: "خالد" };
   const msgWith = buildFailedNotice(cfg.DELIVERY_FAILED_NOTICE, req, "الجوال مغلق");
   check("فيها الاسم والطلب والسبب", msgWith.includes("خالد") && msgWith.includes("D-9") && msgWith.includes("الجوال مغلق") && !msgWith.includes("{"));
+  check("رقم الطلب في المنصة بيحل محل D-n في الرسالة", buildFailedNotice(cfg.DELIVERY_FAILED_NOTICE, req, "x", "30412").includes("30412") && !buildFailedNotice(cfg.DELIVERY_FAILED_NOTICE, req, "x", "30412").includes("D-9"));
   check("من غير سبب -> سبب افتراضي", buildFailedNotice(cfg.DELIVERY_FAILED_NOTICE, req, "").includes("تعذّر الوصول إليكم"));
 
   console.log("\n=== 3) تسجيل التعذّر في الـstore ===");

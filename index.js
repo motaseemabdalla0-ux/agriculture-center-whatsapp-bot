@@ -23,7 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
-const { parseOutcomeCommand, buildFailedNotice } = require("./lib/deliveryOutcome");
+const { parseOutcomeCommand, buildFailedNotice, platformNumberFor } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
 const sentEcho = require("./lib/sentEcho");
@@ -999,7 +999,7 @@ async function processDeliveryOutcome(cmd, allowedRegionKey = null) {
   const failed = deliveryStore.markFailed(cmd.id, cmd.reason);
   if (!failed) return `⚠️ الطلب ${cmd.id} اتقفل قبل كده (تم التوصيل أو تعذّر).`;
   try {
-    const text = buildFailedNotice(getCfgText("DELIVERY_FAILED_NOTICE"), failed, cmd.reason);
+    const text = buildFailedNotice(getCfgText("DELIVERY_FAILED_NOTICE"), failed, cmd.reason, platformNumberFor(failed.phone));
     await boundedCall("delivery-failed-notice", () => client.sendMessage(`${failed.phone}@c.us`, text), 20000);
     return `✅ سجّلت تعذّر تسليم الطلب ${failed.id}، وبعتّ رسالة للمزارع ${failed.name || failed.phone}.`;
   } catch (err) {
