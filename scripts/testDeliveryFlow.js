@@ -41,6 +41,7 @@ const TEXTS = {
   DELIVERY_ASK_DATETIME: "ASK_DATETIME",
   DELIVERY_REMINDER_DATETIME: "REMIND_DATETIME",
   DELIVERY_REGION_CORRECTED: "REGION_CORRECTED {region}",
+  DELIVERY_OUTSIDE_HOURS: "OUTSIDE_HOURS",
   DELIVERY_THANKS: "THANKS {region}",
 };
 const getText = (k) => TEXTS[k];
@@ -77,6 +78,8 @@ async function run() {
   check("4ج: موقع فعلي -> تحديد الجنوب تلقائيًا وينتقل لخطوة اليوم/الوقت، مفيش طلب لسه", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502222222").step === "DATETIME" && store.getPending("966502222222").regionKey === "SOUTH" && store.getPending("966502222222").district === "Al Ibriq" && store.getPending("966502222222").autoDetected === true && store.getPending("966502222222").latitude === 25.7152);
   r = flow.handleReply("966502222222", "ح", getText);
   check("4د: يوم/وقت قصير جدًا -> تذكير ولا يتسجّل طلب", r.reply === "REMIND_DATETIME" && !r.request && store.getPending("966502222222").step === "DATETIME");
+  r = flow.handleReply("966502222222", "الأحد الساعة 5 مساء", getText);
+  check("4د2: وقت برّه الدوام (5 مساء) -> رسالة خارج أوقات العمل، مفيش طلب، ولسه مستني وقت صحيح", r.handled && r.reply === "OUTSIDE_HOURS" && !r.request && store.getPending("966502222222").step === "DATETIME");
   r = flow.handleReply("966502222222", "الأحد الساعة 10 صباحًا", getText);
   check(
     "4هـ: يوم/وقت صحيح -> الطلب اتسجّل بالمنطقة التلقائية + الموقع + الوقت",
@@ -98,7 +101,7 @@ async function run() {
   check("4ي: رقم غير صحيح بعد فشل الموقع -> تذكير بالمناطق (LOCATION_UNKNOWN) تاني", r.reply === "LOCATION_UNKNOWN" && !r.request);
   r = flow.handleReply("966502333333", "3", getText);
   check("4ك: رقم يدوي 3 = الوسط بعد فشل الموقع -> ينتقل لخطوة اليوم/الوقت، مفيش تحديد تلقائي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502333333").regionKey === "CENTER" && store.getPending("966502333333").autoDetected === false && store.getPending("966502333333").district === null);
-  r = flow.handleReply("966502333333", "غدًا مساءً", getText);
+  r = flow.handleReply("966502333333", "غدًا صباحًا", getText);
   check("4ل: الطلب اتسجّل بالمنطقة اليدوية (autoDetected=false)", r.request && r.request.regionKey === "CENTER" && r.request.autoDetected === false);
 
   console.log("\n=== 4ن) تصحيح المنطقة تلقائيًا لو موقع لاحق مختلف عن الاختيار اليدوي (بعد fallback) ===");
