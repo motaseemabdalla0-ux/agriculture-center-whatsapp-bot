@@ -23,6 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
+const { parseOutcomeCommand, buildFailedNotice } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
 const sentEcho = require("./lib/sentEcho");
@@ -980,6 +981,49 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   return true;
 }
 
+// نتيجة توصيل من موظف التوصيل: "تم التوصيل D-n" أو "تعذر التوصيل D-n <السبب>". بيرجّع نص الرد
+// اللي يتبعت لموظف التوصيل. allowedRegionKey (لو جوّه مجموعة منطقة): الطلب لازم يكون تابع لنفس
+// المنطقة. لو تعذّر التسليم: بيتسجّل (FAILED_DELIVERY) وبيتبعت للمزارع رسالة بالسبب
+async function processDeliveryOutcome(cmd, allowedRegionKey = null) {
+  const request = deliveryStore.findRequest(cmd.id);
+  if (!request) return `⚠️ الطلب ${cmd.id} غير موجود.`;
+  if (allowedRegionKey && request.regionKey !== allowedRegionKey) {
+    return `⚠️ الطلب ${cmd.id} تابع لمنطقة تانية، مش مجموعة المنطقة دي.`;
+  }
+
+  if (cmd.kind === "DELIVERED") {
+    const done = deliveryStore.markDelivered(cmd.id);
+    return done ? `✅ تم تسجيل توصيل الطلب ${done.id}.` : `⚠️ الطلب ${cmd.id} اتسجّل مسبقًا.`;
+  }
+
+  const failed = deliveryStore.markFailed(cmd.id, cmd.reason);
+  if (!failed) return `⚠️ الطلب ${cmd.id} اتقفل قبل كده (تم التوصيل أو تعذّر).`;
+  try {
+    const text = buildFailedNotice(getCfgText("DELIVERY_FAILED_NOTICE"), failed, cmd.reason);
+    await boundedCall("delivery-failed-notice", () => client.sendMessage(`${failed.phone}@c.us`, text), 20000);
+    return `✅ سجّلت تعذّر تسليم الطلب ${failed.id}، وبعتّ رسالة للمزارع ${failed.name || failed.phone}.`;
+  } catch (err) {
+    console.log(`⚠️ [توصيل] فشل إرسال رسالة تعذّر التسليم لـ${failed.phone}: ${err.message}`);
+    return `⚠️ سجّلت تعذّر تسليم الطلب ${failed.id} لكن فشل إرسال الرسالة للمزارع (${err.message}) - تواصل معاه يدويًا.`;
+  }
+}
+
+// رسالة جوّه مجموعة توصيل مربوطة: لو أمر نتيجة توصيل (تم/تعذر) بنعالجه ونرد في المجموعة
+async function maybeHandleDeliveryOutcome(msg, groupId) {
+  const cmd = parseOutcomeCommand(msg.body || "");
+  if (!cmd) return false;
+  const groups = deliveryStore.getGroups();
+  const region = Object.values(deliveryStore.REGIONS).find((r) => groups[r.key] === groupId);
+  if (!region) return false;
+  const reply = await processDeliveryOutcome(cmd, region.key);
+  try {
+    await boundedCall("delivery-outcome-reply", () => client.sendMessage(groupId, reply), 15000);
+  } catch (err) {
+    console.log(`⚠️ [توصيل] فشل الرد في المجموعة: ${err.message}`);
+  }
+  return true;
+}
+
 // اسم مجموعة واتساب من معرّفها - client.getChats()/getChatById() بيرموا خطأ "r" حاليًا (نفس
 // مشكلة LID Migration الموثقة في lib/downloadMediaCompat.js)، فبنقرا اسم المجموعة مباشرة من
 // داخل واتساب ويب نفسه (WAWebCollections.Chat) بدل ما نعتمد على أي دالة من مكتبة whatsapp-web.js
@@ -1367,6 +1411,7 @@ client.on("message", async (msg) => {
   // (نتأكد من شكل الرقم مباشرة بدل msg.getChat() اللي بتفشل حاليًا
   // بسبب نفس مشكلة تحديث واتساب ويب اللي كسرت إرسال الردود)
   if (msg.from.endsWith("@g.us")) {
+    if (await maybeHandleDeliveryOutcome(msg, msg.from)) return;
     await maybeRegisterDeliveryGroup(msg, msg.from, msg.author, false);
     return;
   }
@@ -2071,10 +2116,10 @@ async function handleControlCommand(msg) {
       await msg.reply(`🚚 طلبات التوصيل المفتوحة (${open.length}):\n\n${lines.join("\n")}`);
       return;
     }
-    const deliveredMatch = text.match(/^تم\s*التوصيل\s+(D-\d+)$/i);
-    if (deliveredMatch) {
-      const done = deliveryStore.markDelivered(deliveredMatch[1]);
-      await msg.reply(done ? `✅ تم تسجيل توصيل الطلب ${done.id}.` : "⚠️ الطلب غير موجود أو تم تسجيله مسبقًا.");
+    // "تم التوصيل D-n" / "تعذر التوصيل D-n <السبب>" من الأدمن (نفس منطق مجموعات التوصيل)
+    const outcomeCmd = parseOutcomeCommand(text);
+    if (outcomeCmd) {
+      await msg.reply(await processDeliveryOutcome(outcomeCmd));
       return;
     }
 
