@@ -42,6 +42,7 @@ const TEXTS = {
   DELIVERY_REMINDER_DATETIME: "REMIND_DATETIME",
   DELIVERY_REGION_CORRECTED: "REGION_CORRECTED {region}",
   DELIVERY_OUTSIDE_HOURS: "OUTSIDE_HOURS",
+  DELIVERY_OUTSIDE_DAYS: "OUTSIDE_DAYS",
   DELIVERY_THANKS: "THANKS {region}",
 };
 const getText = (k) => TEXTS[k];
@@ -80,6 +81,8 @@ async function run() {
   check("4د: يوم/وقت قصير جدًا -> تذكير ولا يتسجّل طلب", r.reply === "REMIND_DATETIME" && !r.request && store.getPending("966502222222").step === "DATETIME");
   r = flow.handleReply("966502222222", "الأحد الساعة 5 مساء", getText);
   check("4د2: وقت برّه الدوام (5 مساء) -> رسالة خارج أوقات العمل، مفيش طلب، ولسه مستني وقت صحيح", r.handled && r.reply === "OUTSIDE_HOURS" && !r.request && store.getPending("966502222222").step === "DATETIME");
+  r = flow.handleReply("966502222222", "يوم الجمعة الساعة 10 صباحًا", getText);
+  check("4د3: يوم إجازة (الجمعة) -> رسالة خارج أيام العمل، مفيش طلب، ولسه مستني", r.handled && r.reply === "OUTSIDE_DAYS" && !r.request && store.getPending("966502222222").step === "DATETIME");
   r = flow.handleReply("966502222222", "الأحد الساعة 10 صباحًا", getText);
   check(
     "4هـ: يوم/وقت صحيح -> الطلب اتسجّل بالمنطقة التلقائية + الموقع + الوقت",
