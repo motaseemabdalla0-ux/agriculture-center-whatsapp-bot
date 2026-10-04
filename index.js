@@ -1064,6 +1064,88 @@ async function leaveGroup(chatId) {
   );
 }
 
+// محادثات فردية آخر رسالة فيها واردة (من مزارع) من غير أي رد بعدها، خلال آخر `days` يوم - قراءة
+// مباشرة من داخل واتساب ويب (client.getChats() مكسورة). بترجّع الأقدم أولًا
+const CATCHUP_TYPES = ["chat", "image", "document", "video", "audio", "ptt", "location", "vcard", "sticker"];
+async function listUnansweredChats(days) {
+  const sinceSec = Math.floor(Date.now() / 1000) - days * 24 * 60 * 60;
+  const selfId = client.info && client.info.wid ? client.info.wid._serialized : "";
+  const rows = await boundedCall(
+    "list-unanswered",
+    () =>
+      client.pupPage.evaluate((since, allowed) => {
+        const str = (w) => (w ? w._serialized || w.$1 || "" : "");
+        const out = [];
+        for (const c of window.require("WAWebCollections").Chat.getModelsArray()) {
+          if (c.isGroup) continue;
+          const id = str(c.id);
+          if (!id || id.endsWith("@broadcast") || id.endsWith("@newsletter") || id.startsWith("status")) continue;
+          const msgs = c.msgs && c.msgs.getModelsArray ? c.msgs.getModelsArray() : [];
+          const last = msgs[msgs.length - 1];
+          if (!last || (last.id && last.id.fromMe) || last.isNotification) continue;
+          if (!last.t || last.t < since || !allowed.includes(last.type)) continue;
+          out.push({
+            chatId: id,
+            body: last.body || last.caption || "",
+            t: last.t,
+            type: last.type,
+            lat: last.lat,
+            lng: last.lng,
+            notifyName: last.notifyName || "",
+          });
+        }
+        return out;
+      }, sinceSec, CATCHUP_TYPES),
+    30000
+  );
+  return rows.filter((r) => r.chatId !== selfId).sort((a, b) => a.t - b.t);
+}
+
+// رسالة "شبه حقيقية" من بيانات واتساب ويب المباشرة - الردود بتتبعت بـclient.sendMessage للشات نفسه
+function buildCatchUpMessage(row) {
+  return {
+    from: row.chatId,
+    fromMe: false,
+    body: row.type === "chat" ? row.body : row.type === "location" ? "" : row.body || "",
+    timestamp: row.t,
+    hasMedia: row.type !== "chat" && row.type !== "location",
+    location: row.type === "location" ? { latitude: row.lat, longitude: row.lng } : undefined,
+    id: { _serialized: `catchup_${row.chatId}_${row.t}` },
+    _data: { notifyName: row.notifyName },
+    reply: (text) => client.sendMessage(row.chatId, text),
+    getContact: async () => null,
+  };
+}
+
+let pendingCatchUp = null; // { rows, days } - بيستنى "تأكيد مراجعة الرسائل" من المدير
+let catchUpRunning = false;
+
+// بيرد على المحادثات المعلّقة واحدة واحدة بنفس منطق الرد العادي (processFarmerMessage) وبفاصل
+// عشوائي 25-50 ثانية بينهم - الحساب اتقيّد قبل كده بسبب نمط رسائل جماعية، فممنوع الرد دفعة واحدة
+async function runCatchUp(rows, notify) {
+  catchUpRunning = true;
+  let done = 0;
+  try {
+    for (const row of rows) {
+      const msg = buildCatchUpMessage(row);
+      try {
+        if ((await isEditorMessage(msg)) || (await isAdminMessage(msg))) continue;
+        msg._canonicalChatId = await resolveCanonicalChatId(msg);
+        await processFarmerMessage(msg);
+        done++;
+      } catch (err) {
+        console.log(`⚠️ [مراجعة قديمة] فشل الرد على ${row.chatId}: ${err.message}`);
+      }
+      if (row !== rows[rows.length - 1]) {
+        await new Promise((r) => setTimeout(r, 25000 + Math.random() * 25000));
+      }
+    }
+  } finally {
+    catchUpRunning = false;
+  }
+  await notify(`✅ خلصت مراجعة الرسائل القديمة: اتعالجت ${done} محادثة من ${rows.length}.`);
+}
+
 // آخر قائمة مجموعات اتعرضت بأمر "مجموعات البوت" - عشان أمر "غادر مجموعة <رقم>" يقدر يرجع لنفس
 // الترتيب من غير ما المدير يضطر يكتب معرّف المجموعة الطويل بنفسه
 let lastGroupListing = [];
@@ -2336,6 +2418,55 @@ async function handleControlCommand(msg) {
       const removed = adminStore.removeAdmin(phone);
       await msg.reply(
         removed ? `✅ تم حذف ${phone} من مستقبلي التقرير.` : `ℹ️ الرقم ${phone} مش موجود أصلًا.`
+      );
+      return;
+    }
+
+    // مراجعة الرسائل القديمة اللي وصلت وقت ما البوت كان مقفول/مقيّد ومحدش رد عليها: خطوتين
+    // (معاينة العدد الأول، وبعدين "تأكيد مراجعة الرسائل" للرد الفعلي) عشان الرد الجماعي المفاجئ
+    // هو بالظبط اللي سبّب تقييد الحساب قبل كده
+    const catchUpPreviewMatch = toWesternDigits(text).match(/^راجع\s*الرسائل\s*القديمة(?:\s+(\d{1,2}))?$/i);
+    if (catchUpPreviewMatch) {
+      if (catchUpRunning) {
+        await msg.reply("⚠️ فيه مراجعة شغّالة بالفعل، استنى تخلص.");
+        return;
+      }
+      const days = Math.min(parseInt(catchUpPreviewMatch[1] || "3", 10), 14);
+      try {
+        const MAX_PER_RUN = 25;
+        const all = await listUnansweredChats(days);
+        if (all.length === 0) {
+          await msg.reply(`📭 مفيش محادثات فردية معلّقة (من غير رد) خلال آخر ${days} يوم.`);
+          return;
+        }
+        const rows = all.slice(0, MAX_PER_RUN);
+        pendingCatchUp = { rows, days };
+        await msg.reply(
+          `🔎 لقيت ${all.length} محادثة فردية آخر رسالة فيها من مزارع من غير رد (آخر ${days} يوم).\n` +
+            `هرد على أقدم ${rows.length} منهم بفاصل 25-50 ثانية بين كل رد (${Math.ceil((rows.length * 37) / 60)} دقيقة تقريبًا) - بنفس منطق الرد العادي.\n\n` +
+            `⚠️ الحساب اتقيّد قبل كده بسبب الإرسال الجماعي، فتأكد إن التقييد اتفك فعلًا قبل ما تأكد.\n` +
+            `للبدء اكتب: تأكيد مراجعة الرسائل`
+        );
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر قراءة المحادثات المعلّقة: ${err.message}`);
+      }
+      return;
+    }
+
+    if (/^تأكيد\s*مراجعة\s*الرسائل$/i.test(text)) {
+      if (catchUpRunning) {
+        await msg.reply("⚠️ فيه مراجعة شغّالة بالفعل، استنى تخلص.");
+        return;
+      }
+      if (!pendingCatchUp) {
+        await msg.reply('⚠️ مفيش قائمة جاهزة. اكتب "راجع الرسائل القديمة" الأول.');
+        return;
+      }
+      const { rows } = pendingCatchUp;
+      pendingCatchUp = null;
+      await msg.reply(`▶️ بدأت الرد على ${rows.length} محادثة، هبلّغك لما أخلص.`);
+      runCatchUp(rows, (t) => msg.reply(t).catch(() => {})).catch((err) =>
+        console.log(`⚠️ [مراجعة قديمة] توقفت: ${err.message}`)
       );
       return;
     }
