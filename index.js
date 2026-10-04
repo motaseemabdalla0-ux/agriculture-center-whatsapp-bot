@@ -1079,7 +1079,7 @@ async function listUnansweredChats(days) {
         for (const c of window.require("WAWebCollections").Chat.getModelsArray()) {
           if (c.isGroup) continue;
           const id = str(c.id);
-          if (!id || id.endsWith("@broadcast") || id.endsWith("@newsletter") || id.startsWith("status")) continue;
+          if (!/@(c\.us|lid)$/.test(id)) continue;
           const msgs = c.msgs && c.msgs.getModelsArray ? c.msgs.getModelsArray() : [];
           const last = msgs[msgs.length - 1];
           if (!last || (last.id && last.id.fromMe) || last.isNotification) continue;
@@ -1377,6 +1377,13 @@ client.on("message", async (msg) => {
   // على المعرّف الخاص ده كنشر "حالة" جديدة على حساب البوت نفسه، مش إرسال رسالة عادية (السبب
   // الحقيقي اللي كان بيخلي البوت ينشر حالات تلقائيًا فيها نص القائمة الرئيسية)
   if (msg.from.endsWith("@broadcast")) return;
+
+  // أي محادثة مش فردية عادية (@c.us أو @lid) ممنوع البوت يرد عليها - زي "مساعد الأعمال" (Meta AI،
+  // معرّفه @bot) اللي كان البوت بيبعتله القائمة فيرد عليه ويدخلوا في لوب رسائل
+  if (!/@(c\.us|lid)$/.test(msg.from)) {
+    console.log(`🤖 [تجاهل] رسالة من محادثة غير فردية عادية (${msg.from}) - مفيش رد.`);
+    return;
+  }
 
   // حماية ضد ازدواج حدث "message" (مشكلة معروفة حاليًا في واتساب ويب بتبعت نفس الرسالة مرتين أحيانًا)
   // بنستخدم (المرسل + الوقت + أول جزء من النص) كمعرّف بديل، لأن msg.id نفسه بقى غير موثوق بسبب نفس مشكلة تحديث واتساب
