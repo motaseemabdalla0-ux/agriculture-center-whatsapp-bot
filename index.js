@@ -2,7 +2,7 @@ console.log(`🚀 [بدء] السكريبت بدأ التنفيذ - ${new Date()
 
 const fs = require("fs");
 const path = require("path");
-const { Client, LocalAuth, List } = require("whatsapp-web.js");
+const { Client, LocalAuth, List, MessageMedia } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cfg = require("./config");
 const { runBroadcast } = require("./lib/broadcastRunner");
@@ -23,6 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
+const { buildFullReport, formatFullReportMessage, buildFullReportBuffer, reportFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
@@ -868,6 +869,17 @@ async function maybeSendPendingItemsReminder() {
 
 // بيبعت تقرير طلبات التوصيل المفتوحة (مقسّم شمال/جنوب/وسط) تلقائيًا كل يوم الساعة
 // DELIVERY_REPORT_HOUR لأي رقم مسجّل بأمر "اضف رقم تقرير التوصيل" - بطلب صريح من الإدارة
+// بيبعت ملف Excel بتفاصيل طلبات التوصيل لمحادثة معيّنة (بيستخدم نفس الـdata اللي اتبنى منها النص)
+async function sendDeliveryReportFile(chatId, data) {
+  const buffer = await buildFullReportBuffer(data);
+  const media = new MessageMedia(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer.toString("base64"),
+    reportFileName(data.now)
+  );
+  await boundedCall("send-report-file", () => client.sendMessage(chatId, media), 60000);
+}
+
 async function maybeSendDeliveryDailyReport() {
   const now = new Date();
   const today = todayStr(now);
@@ -879,16 +891,17 @@ async function maybeSendDeliveryDailyReport() {
   if (recipients.length === 0) return;
 
   try {
-    const data = buildDeliveryDailyReport();
-    const text = formatDeliveryDailyReport(data);
+    const data = buildFullReport();
+    const text = formatFullReportMessage(data);
     for (const phone of recipients) {
       try {
         await client.sendMessage(`${phone}@c.us`, text);
+        if (data.total > 0) await sendDeliveryReportFile(`${phone}@c.us`, data);
       } catch (err) {
         console.log(`⚠️ فشل إرسال تقرير التوصيل اليومي لـ ${phone}: ${err.message}`);
       }
     }
-    console.log(`🚚 اتبعت تقرير طلبات التوصيل اليومي لـ ${recipients.length} رقم (${data.total} طلب مفتوح).`);
+    console.log(`🚚 اتبعت تقرير طلبات التوصيل اليومي لـ ${recipients.length} رقم (${data.total} طلب، ${data.open} مفتوح).`);
   } catch (err) {
     console.log(`⚠️ فشل تجهيز تقرير التوصيل اليومي: ${err.message}`);
   }
@@ -2598,9 +2611,28 @@ async function handleControlCommand(msg) {
 
     // تشغيل فوري لتقرير طلبات التوصيل (من غير استنى الساعة 10 صباحًا) - بيتبعت لنفس المحادثة
     // اللي طلبته، مش لقائمة المستقبلين المسجّلين (عشان تقدر تعاين الشكل بسرعة)
-    if (/^تقرير\s*التوصيل$/i.test(text)) {
-      const data = buildDeliveryDailyReport();
-      await msg.reply(formatDeliveryDailyReport(data));
+    if (/^تقرير\s*التوصيل$/i.test(text) || /^تفاصيل\s*(ال)?مستفيدين$/i.test(text)) {
+      try {
+        const data = buildFullReport();
+        const detailsOnly = /^تفاصيل/i.test(text);
+        if (!detailsOnly || data.total === 0) await safeReply(msg, formatFullReportMessage(data));
+        if (data.total > 0) await sendDeliveryReportFile(msg.from, data);
+      } catch (err) {
+        await safeReply(msg, `⚠️ تعذّر تجهيز تقرير التوصيل: ${err.message}`);
+      }
+      return;
+    }
+
+    // استبعاد طلب (تجريبي مثلًا) من أرقام التقرير الكامل - الطلب نفسه بيفضل محفوظ
+    const excludeMatch = toWesternDigits(text).match(/^استبعد\s*طلب\s*(?:توصيل\s*)?(D-\d+)\s*(?:من\s*التقرير)?$/i);
+    if (excludeMatch) {
+      const id = excludeMatch[1].toUpperCase();
+      if (!deliveryStore.findRequest(id)) {
+        await safeReply(msg, `⚠️ مفيش طلب توصيل بالرقم ${id}.`);
+      } else {
+        const added = deliveryStore.excludeFromReports(id);
+        await safeReply(msg, added ? `✅ الطلب ${id} اتستبعد من تقرير التوصيل.` : `ℹ️ الطلب ${id} مستبعد بالفعل.`);
+      }
       return;
     }
 
