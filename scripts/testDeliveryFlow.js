@@ -72,8 +72,13 @@ async function run() {
   store.markAwaitingChoice("966502222222", "خالد");
   r = flow.handleReply("966502222222", "hello", getText);
   check("4: رد غير صحيح -> تذكير بالخيارين وتفضل الحالة", r.handled && r.reply === "REMIND_CHOICE" && store.getPending("966502222222").step === "CHOICE");
+  r = flow.handleReply("966502222222", "اذا تقدر تمرني وقت الدوام", getText);
+  check("4أ: كلام حر بدون خيار واضح -> تذكير", r.reply === "REMIND_CHOICE");
+  r = flow.handleReply("966502222222", "توصيل البطاقه", getText);
+  check("4ب: كلمة (توصيل البطاقة) = خيار 2", r.reply === "ASK_REGION" && store.getPending("966502222222").step === "REGION");
+  store.markAwaitingChoice("966502222222", "خالد");
   r = flow.handleReply("966502222222", "2", getText);
-  check("4ب: اختيار توصيل -> طلب الموقع (أو رقم يدوي)", r.reply === "ASK_REGION" && store.getPending("966502222222").step === "REGION");
+  check("4ب2: اختيار توصيل -> طلب الموقع (أو رقم يدوي)", r.reply === "ASK_REGION" && store.getPending("966502222222").step === "REGION");
   // نقطة مركز "Al Ibriq" الفعلية من ملف مناطق_مركز_الزراعة_العلا.kmz الرسمي -> المفروض الجنوب تلقائيًا
   r = flow.handleLocation("966502222222", 25.7152, 38.6513, getText);
   check("4ج: موقع فعلي -> تحديد الجنوب تلقائيًا وينتقل لخطوة اليوم/الوقت، مفيش طلب لسه", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502222222").step === "DATETIME" && store.getPending("966502222222").regionKey === "SOUTH" && store.getPending("966502222222").district === "Al Ibriq" && store.getPending("966502222222").autoDetected === true && store.getPending("966502222222").latitude === 25.7152);
