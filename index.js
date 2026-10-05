@@ -2137,7 +2137,7 @@ async function handleControlCommand(msg) {
 
     // تحقق مباشر من المنصة: كل البطاقات الجاهزة للاستلام (Printed + Pending Delivery) مقابل سجل
     // إرسال "card_pickup" - قراءة فقط، مفيش إرسال لأي مزارع
-    if (/^تحقق\s*(من\s*)?(ال)?بطاقات\s*(ال)?جاهزة$/i.test(text)) {
+    if (/^تحقق\s*(من\s*)?(ال)?بطاقات\s*(ال)?جاهز[ةه]$/i.test(text)) {
       if (!portalSync.isConfigured()) {
         await msg.reply("⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
