@@ -2135,6 +2135,39 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // تحقق مباشر من المنصة: كل البطاقات الجاهزة للاستلام (Printed + Pending Delivery) مقابل سجل
+    // إرسال "card_pickup" - قراءة فقط، مفيش إرسال لأي مزارع
+    if (/^تحقق\s*(من\s*)?(ال)?بطاقات\s*(ال)?جاهزة$/i.test(text)) {
+      if (!portalSync.isConfigured()) {
+        await msg.reply("⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      await msg.reply("⏳ بقرا البطاقات الجاهزة من المنصة وبقارنها بسجل الإرسال (ممكن تاخد دقيقة)...");
+      try {
+        const rows = await require("./lib/portalScraper").fetchPrintedCards(1000);
+        const noPhone = rows.filter((r) => !r.phone);
+        const withPhone = rows.filter((r) => r.phone);
+        const unsent = withPhone.filter((r) => !sentTracker.hasBeenSent("card_pickup", r.phone));
+        const lines = [
+          `📋 البطاقات الجاهزة في المنصة: ${rows.length}`,
+          `✅ تم الإرسال لهم: ${withPhone.length - unsent.length}`,
+          `❌ لم يُرسل لهم: ${unsent.length}`,
+          `📵 بدون رقم جوال: ${noPhone.length}`,
+        ];
+        if (unsent.length) {
+          lines.push("", "*لم يُرسل لهم:*", ...unsent.map((r, i) => `${i + 1}. ${r.name || "-"} - ${r.phone}${r.formNumber ? ` (طلب ${r.formNumber})` : ""}`));
+        }
+        if (noPhone.length) {
+          lines.push("", "*بدون جوال:*", ...noPhone.map((r, i) => `${i + 1}. ${r.name || "-"}${r.formNumber ? ` (طلب ${r.formNumber})` : ""}`));
+        }
+        if (!unsent.length && !noPhone.length) lines.push("", "✔️ كل البطاقات الجاهزة وصلها إشعار الاستلام.");
+        await msg.reply(lines.join("\n"));
+      } catch (err) {
+        await msg.reply(`⚠️ تعذّر التحقق من المنصة: ${err.message}`);
+      }
+      return;
+    }
+
     if (/^الحصة$/i.test(text)) {
       if (!portalSync.isConfigured()) {
         await msg.reply("⚠️ نظام البطاقات مش متظبّط أصلًا.");
