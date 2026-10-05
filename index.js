@@ -101,7 +101,23 @@ async function matchesPhoneList(msg, phoneList) {
     const rawNumber =
       (contact && contact.number) ||
       ((contact && contact.id && contact.id._serialized) || "").replace(/@.*/, "");
-    const matched = !!rawNumber && phoneList.includes(rawNumber);
+    let matched = !!rawNumber && phoneList.includes(rawNumber);
+    if (!matched) {
+      // getContact أحيانًا بيرجّع الـLID نفسه بدل الرقم (وده سبب رفض أوامر الأدمن) - بنجرب ذاكرة
+      // الـLID ثم client.getContactLidAndPhone اللي بترجع الرقم الحقيقي
+      let pn = deliveryStore.lookupLid(chatId);
+      if (!pn) {
+        try {
+          const res = await boundedCall("lid-phone", () => client.getContactLidAndPhone([chatId]));
+          pn = res && res[0] && res[0].pn ? String(res[0].pn).replace(/@.*/, "") : "";
+          if (pn) deliveryStore.cacheLid(chatId, pn);
+        } catch (e) {
+          console.log(`⚠️ [تحقق هوية] getContactLidAndPhone فشل: ${e.message}`);
+        }
+      }
+      if (pn && phoneList.includes(pn)) matched = true;
+      console.log(`ℹ️ [تحقق هوية] ترجمة ثانية للـLID -> "${pn || "؟"}" (${matched ? "متطابق" : "مش متطابق"})`);
+    }
     console.log(`${matched ? "✅" : "ℹ️"} [تحقق هوية] رقم @lid "${chatId}" -> "${rawNumber || "؟"}" (${matched ? "متطابق" : "مش متطابق"})`);
     return matched;
   } catch (err) {
