@@ -24,7 +24,7 @@ const {
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
 const { buildFullReport, formatFullReportMessage, buildFullReportBuffer, reportFileName } = require("./lib/deliveryFullReport");
-const { parseOutcomeCommand, buildFailedNotice, platformNumberFor } = require("./lib/deliveryOutcome");
+const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
 const sentEcho = require("./lib/sentEcho");
@@ -1039,11 +1039,18 @@ async function processDeliveryOutcome(cmd, allowedRegionKey = null) {
 
 // رسالة جوّه مجموعة توصيل مربوطة: لو أمر نتيجة توصيل (تم/تعذر) بنعالجه ونرد في المجموعة
 async function maybeHandleDeliveryOutcome(msg, groupId) {
-  const cmd = parseOutcomeCommand(msg.body || "");
-  if (!cmd) return false;
   const groups = deliveryStore.getGroups();
   const region = Object.values(deliveryStore.REGIONS).find((r) => groups[r.key] === groupId);
   if (!region) return false;
+  let cmd = parseOutcomeCommand(msg.body || "");
+  if (!cmd) {
+    // رد (Reply) على رسالة طلب توصيل بجملة حرة ("تم التسليم"، "لم يتم الرد") - رقم الطلب من الرسالة المقتبسة
+    const quotedBody = msg.hasQuotedMsg && msg._data && msg._data.quotedMsg ? msg._data.quotedMsg.body : "";
+    const id = extractRequestId(quotedBody);
+    const kind = id ? classifyFreeText(msg.body || "") : null;
+    if (!kind) return false;
+    cmd = { kind, id, reason: kind === "FAILED" ? String(msg.body || "").trim() : "" };
+  }
   const reply = await processDeliveryOutcome(cmd, region.key);
   try {
     await boundedCall("delivery-outcome-reply", () => client.sendMessage(groupId, reply), 15000);

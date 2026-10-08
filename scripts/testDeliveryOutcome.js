@@ -47,6 +47,21 @@ try {
   check("لو اتسلّمت بعد موعد جديد، markDelivered بتقفل الطلب المتعذّر كمسلَّم", redelivered && redelivered.status === "DELIVERED");
   check("findRequest بيلاقي الطلب بأي حالة", store.findRequest(r.id.toLowerCase()).id === r.id);
 
+  console.log("\n=== رد حر على رسالة الطلب (من الصورة الحقيقية) ===");
+  const { classifyFreeText: cls, extractRequestId } = require("../lib/deliveryOutcome");
+  check("تم التسليم -> DELIVERED", cls("تم التسليم") === "DELIVERED");
+  check("تم التسليم وبدايه عنها ولدها -> DELIVERED", cls("تم التسليم وبدايه عنها ولدها") === "DELIVERED");
+  check("تم التسليم والنيابه عن مالك البطاقه -> DELIVERED", cls("تم التسليم والنيابه عن مالك البطاقه") === "DELIVERED");
+  check("تم التوصيل / تم الاستلام -> DELIVERED", cls("تم التوصيل") === "DELIVERED" && cls("تم الاستلام") === "DELIVERED");
+  check("لم يتم الرد -> FAILED", cls("لم يتم الرد") === "FAILED");
+  check("لا يرد / تعذر / لم يتم التسليم -> FAILED", cls("لا يرد على الجوال") === "FAILED" && cls("تعذر الوصول") === "FAILED" && cls("لم يتم التسليم") === "FAILED");
+  check("تم تغيير الموعد وتم التسليم -> null (يفضل قيد التوصيل)", cls("تم تغيير الموعد وتم التسليم") === null);
+  check("تأجيل الموعد -> null", cls("تم تأجيل التوصيل لبكرة") === null);
+  check("كلام عادي -> null", cls("اوك") === null && cls("") === null);
+  check("كلمات متعارضة -> null", cls("تم التسليم ولم يتم الرد") === null);
+  check("يتم التسليم بكرة (مش تم) -> null", cls("يتم التسليم بكرة") === null);
+  check("extractRequestId من رسالة الطلب", extractRequestId("🚚 طلب توصيل بطاقة جديد (D-18)\n\nالاسم") === "D-18" && extractRequestId("بدون رقم") === null);
+
   console.log(`\n🎉 كل اختبارات نتيجة التوصيل نجحت (${passed} اختبار).`);
 } catch (err) {
   console.error("💥 فشل:", err.message);

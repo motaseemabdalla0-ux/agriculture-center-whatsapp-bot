@@ -109,7 +109,7 @@ async function run() {
   check("4ي: رقم غير صحيح بعد فشل الموقع -> تذكير بالمناطق (LOCATION_UNKNOWN) تاني", r.reply === "LOCATION_UNKNOWN" && !r.request);
   r = flow.handleReply("966502333333", "3", getText);
   check("4ك: رقم يدوي 3 = الوسط بعد فشل الموقع -> ينتقل لخطوة اليوم/الوقت، مفيش تحديد تلقائي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966502333333").regionKey === "CENTER" && store.getPending("966502333333").autoDetected === false && store.getPending("966502333333").district === null);
-  r = flow.handleReply("966502333333", "غدًا صباحًا", getText);
+  r = flow.handleReply("966502333333", "الأحد الساعة 10 صباحًا", getText);
   check("4ل: الطلب اتسجّل بالمنطقة اليدوية (autoDetected=false)", r.request && r.request.regionKey === "CENTER" && r.request.autoDetected === false);
 
   console.log("\n=== 4ن) تصحيح المنطقة تلقائيًا لو موقع لاحق مختلف عن الاختيار اليدوي (بعد fallback) ===");
@@ -158,7 +158,7 @@ async function run() {
   check("5و: موقع خارج كل المناطق المعروفة -> رسالة توضيحية، وحالة الانتظار فاضلة في REGION", r.handled && !r.request && r.reply === "LOCATION_UNKNOWN" && store.getPending("966503333333").step === "REGION");
   r = flow.handleReply("966503333333", "1", getText);
   check("5ز: بعد فشل الموقع، رقم يدوي 1 = الشمال بيشتغل عادي", r.handled && !r.request && r.reply === "ASK_DATETIME" && store.getPending("966503333333").regionKey === "NORTH" && store.getPending("966503333333").autoDetected === false);
-  const r3 = flow.handleReply("966503333333", "غدًا صباحًا", getText);
+  const r3 = flow.handleReply("966503333333", "الأحد الساعة 10 صباحًا", getText);
   const sent2 = [];
   await flow.forwardRequest({ sendMessage: async (to) => { sent2.push(to); } }, r3.request);
   check("5ح: منطقة 1 = الشمال (اختيار يدوي بعد فشل الموقع) -> مجموعة الشمال، رسالة نصية بس (من غير pin - المنطقة اتحددت يدويًا مش من موقع)", sent2.length === 1 && sent2[0] === "111@g.us");
