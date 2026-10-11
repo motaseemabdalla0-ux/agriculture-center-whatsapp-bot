@@ -23,7 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
-const { applyDeliveredFromPortal } = require("./lib/portalDeliveryCheck");
+const { applyDeliveredFromPortal, saveDeliveredSnapshot } = require("./lib/portalDeliveryCheck");
 const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
@@ -706,9 +706,9 @@ async function refreshDeliveriesBeforeReport() {
 let lastDeliveryReconcileAt = 0;
 async function reconcileDeliveriesWithPortal() {
   lastDeliveryReconcileAt = Date.now();
-  const open =deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
-  if (open.length === 0) return "مفيش طلبات توصيل مفتوحة للفحص.";
+  const open = deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
   const rows = await require("./lib/portalScraper").fetchDeliveredRows();
+  saveDeliveredSnapshot(rows);
   const updated = applyDeliveredFromPortal(rows, platformNumberFor);
   const groups = deliveryStore.getGroups();
   for (const u of updated) {

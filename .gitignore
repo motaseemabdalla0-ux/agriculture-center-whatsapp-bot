@@ -69,3 +69,4 @@ custom_message.csv
 broadcast_prep/
 delivery_state.json
 delivery_state.json.bak
+portal_delivered_snapshot.json

@@ -5,7 +5,7 @@ const path = require("path");
 const assert = require("assert");
 
 const ROOT = path.join(__dirname, "..");
-const DATA_FILES = ["delivery_state.json", "delivery_state.json.bak", "farmer_state.json", "farmer_state.json.bak"];
+const DATA_FILES = ["delivery_state.json", "delivery_state.json.bak", "farmer_state.json", "farmer_state.json.bak", "portal_delivered_snapshot.json"];
 const snapshot = () => Object.fromEntries(DATA_FILES.map((n) => [n, fs.existsSync(path.join(ROOT, n)) ? fs.readFileSync(path.join(ROOT, n)) : null]));
 const wipe = () => DATA_FILES.forEach((n) => fs.existsSync(path.join(ROOT, n)) && fs.unlinkSync(path.join(ROOT, n)));
 const restore = (s) => DATA_FILES.forEach((n) => {
@@ -74,7 +74,7 @@ async function run() {
   const { buildPrepBuffer, prepFileName } = require("../lib/deliveryFullReport");
   const pwb = new ExcelJS.Workbook();
   await pwb.xlsx.load(await buildPrepBuffer(data));
-  check("3ط: أوراق التجهيز (كل البطاقات + 3 مناطق)", pwb.worksheets.map((w) => w.name).join("|") === "كل البطاقات|الشمال|الوسط|الجنوب|تم التوصيل");
+  check("3ط: أوراق التجهيز (كل البطاقات + 3 مناطق)", pwb.worksheets.map((w) => w.name).join("|") === "كل البطاقات|الشمال|الوسط|الجنوب|تم التوصيل|سجل التسليم (المنصة)");
   check("3ي: فيها المفتوحين بس (2 + العنوان) وعمود تم التجهيز فاضي", pwb.getWorksheet("كل البطاقات").rowCount === 3 && pwb.getWorksheet("كل البطاقات").getCell("J1").value === "تم التجهيز");
   check("3ك: ورقة الجنوب فيها منى بس", pwb.getWorksheet("الجنوب").rowCount === 2 && pwb.getWorksheet("الجنوب").getCell("B2").value === "منى");
   check("3ل: اسم ملف التجهيز فيه التاريخ", /^البطاقات المطلوب تجهيزها - \d{4}-\d{2}-\d{2}\.xlsx$/.test(prepFileName()));
@@ -83,7 +83,7 @@ async function run() {
   const buffer = await buildFullReportBuffer(data);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
-  check("4: الأوراق الخمسة بالترتيب", wb.worksheets.map((w) => w.name).join("|") === "الملخص|كل الطلبات|الشمال|الوسط|الجنوب|تم التوصيل");
+  check("4: الأوراق الخمسة بالترتيب", wb.worksheets.map((w) => w.name).join("|") === "الملخص|كل الطلبات|الشمال|الوسط|الجنوب|تم التوصيل|سجل التسليم (المنصة)");
   const sum = wb.getWorksheet("الملخص");
   check("4ب: بطاقات الأرقام (4 / 1 / 2 / 1)", sum.getCell("A5").value === 4 && sum.getCell("C5").value === 1 && sum.getCell("E5").value === 2 && sum.getCell("G5").value === 1);
   check("4ج: صف إجمالي المناطق قيم ثابتة مش صيغ", sum.getCell("B16").value === 4 && typeof sum.getCell("B16").value === "number");
@@ -104,6 +104,20 @@ async function run() {
   const pwb2 = new ExcelJS.Workbook();
   await pwb2.xlsx.load(await buildPrepBuffer(data));
   check("4س: ملف التجهيز فيه ورقة تم التوصيل بنفس البيانات", pwb2.getWorksheet("تم التوصيل").getCell("B2").value === "أحمد" && formatPrepList(data).includes("تم توصيل: 1 بطاقة"));
+
+  console.log("\n=== 4ع) سجل التسليم الكامل من المنصة (البيانات القديمة) ===");
+  const { saveDeliveredSnapshot } = require("../lib/portalDeliveryCheck");
+  saveDeliveredSnapshot([
+    { name: "أحمد", phone: "966501111111", nationalId: "1000000001", formNumber: "30001" }, // مرتبط بطلب أحمد
+    { name: "قديم بدون طلب", phone: "966599999999", nationalId: "1000000002", formNumber: "29000" }, // مالوش طلب توصيل
+  ]);
+  const hdata = buildFullReport();
+  check("4ع: لقطة المنصة اتحمّلت (2) وأحمد مرتبط بطلبه والقديم لأ", hdata.portalHistory.rows.length === 2 && hdata.portalHistory.rows[0].requestId === a.id && hdata.portalHistory.rows[1].requestId === "");
+  const hwb = new ExcelJS.Workbook();
+  await hwb.xlsx.load(await buildFullReportBuffer(hdata));
+  const hs = hwb.getWorksheet("سجل التسليم (المنصة)");
+  check("4ف: ورقة السجل: الاتنين + العنوان + رأس الجدول", hs.rowCount === 4 && hs.getCell("B4").value === "قديم بدون طلب" && hs.getCell("E4").value === "—");
+  check("4ق: بدون لقطة -> الورقة موجودة بملاحظة 'لسه ما اتقرا'", (() => { require("fs").unlinkSync(require("../lib/portalDeliveryCheck").SNAPSHOT_FILE); return buildFullReport().portalHistory.rows.length === 0; })());
 
   console.log("\n=== 5) رقم الطلب من المنصة ===");
   const state2 = JSON.parse(fs.readFileSync(store.STORE_FILE, "utf8"));
