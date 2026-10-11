@@ -23,6 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
+const { applyDeliveredFromPortal } = require("./lib/portalDeliveryCheck");
 const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
@@ -674,7 +675,36 @@ async function maybeSyncPortal() {
   await runExclusive("نظام البطاقات", async () => {
     const resultText = await runPortalSyncOnce();
     console.log(`🔄 [نظام البطاقات] ${resultText}`);
+    // بعد المزامنة: تأكيد تسليم طلبات التوصيل من تاب "Delivered" في المنصة (من غير ما نستنى الموظف)
+    try {
+      const reconcileText = await reconcileDeliveriesWithPortal();
+      console.log(`🚚 [تسليم المنصة] ${reconcileText}`);
+    } catch (err) {
+      console.log(`⚠️ [تسليم المنصة] تعذّر الفحص: ${err.message}`);
+    }
   });
+}
+
+// بيقرا تاب "Delivered" من المنصة ويطابقه مع طلبات التوصيل المفتوحة/المتعذّرة، وأي طلب ظاهر
+// هناك بيتسجّل "تم التوصيل" (مصدره "portal") - مع إشعار في مجموعة منطقته. بيرجّع نص ملخّص
+async function reconcileDeliveriesWithPortal() {
+  const open = deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
+  if (open.length === 0) return "مفيش طلبات توصيل مفتوحة للفحص.";
+  const rows = await require("./lib/portalScraper").fetchDeliveredRows();
+  const updated = applyDeliveredFromPortal(rows, platformNumberFor);
+  const groups = deliveryStore.getGroups();
+  for (const u of updated) {
+    const groupId = groups[u.regionKey];
+    if (!groupId) continue;
+    try {
+      await boundedCall("portal-delivered-notice", () => client.sendMessage(groupId, `✅ الطلب ${u.id} (${u.name || u.phone}) ظاهر "تم التسليم" في المنصة - تم تسجيله توصيلًا.`), 15000);
+    } catch (err) {
+      console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
+    }
+  }
+  const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
+  reconcileDeliveriesWithPortal.lastUpdated = updated;
+  return text;
 }
 
 // نفّذ مهمة بث (بث عادي / حالة تسجيل / استلام بطاقة) مع قفل عشان منشغلش أكتر من مهمة في نفس الوقت
@@ -2654,6 +2684,32 @@ async function handleControlCommand(msg) {
       const phone = removeDeliveryReportMatch[1];
       const removed = deliveryStore.removeReportRecipient(phone);
       await msg.reply(removed ? `✅ تم حذف ${phone} من مستقبلي تقرير التوصيل.` : `ℹ️ الرقم ${phone} مش موجود أصلًا.`);
+      return;
+    }
+
+    // فحص فوري لتسليم الطلبات من المنصة (تاب Delivered) - نفس الفحص اللي بيتعمل بعد كل مزامنة
+    if (/^(فحص|تحقق)\s*(من\s*)?(ال)?تسليم\s*(من\s*)?(ال)?منص[ةه]$/i.test(text)) {
+      if (!portalSync.isConfigured()) {
+        await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      if (broadcastInProgress) {
+        await safeReply(msg, "⏳ فيه مهمة تانية شغّالة (إرسال أو مزامنة) - جرّب بعد دقائق.");
+        return;
+      }
+      await safeReply(msg, "⏳ بفحص تاب \"تم التسليم\" في المنصة وبطابقه مع طلبات التوصيل (ممكن ياخد دقيقة)...");
+      let reply;
+      broadcastInProgress = true;
+      try {
+        const text2 = await reconcileDeliveriesWithPortal();
+        const updated = reconcileDeliveriesWithPortal.lastUpdated || [];
+        reply = `✅ ${text2}${updated.length ? "\n\n" + updated.map((u) => `• ${u.id} - ${u.name || u.phone}`).join("\n") : ""}`;
+      } catch (err) {
+        reply = `⚠️ تعذّر الفحص: ${err.message}`;
+      } finally {
+        broadcastInProgress = false;
+      }
+      await safeReply(msg, reply);
       return;
     }
 
