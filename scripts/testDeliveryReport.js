@@ -57,6 +57,12 @@ function run() {
   check("4هـ: removeReportRecipient بيشيل فعليًا", store.removeReportRecipient("966509999999") === true);
   check("4و: رقم مش موجود -> false", store.removeReportRecipient("966509999999") === false);
 
+  console.log("\n=== 4ب) مستقبلو قائمة تجهيز البطاقات (منفصلين عن التقرير) ===");
+  check("4ب: مفيش مستقبلين في الأول", store.getPrepRecipients().length === 0);
+  check("4ب2: add بيضيف و add تاني false", store.addPrepRecipient("966508888888") === true && store.addPrepRecipient("966508888888") === false);
+  check("4ب3: منفصلين عن مستقبلي تقرير التوصيل", store.getPrepRecipients().includes("966508888888") && !store.getReportRecipients().includes("966508888888"));
+  check("4ب4: remove بيشيل", store.removePrepRecipient("966508888888") === true && store.getPrepRecipients().length === 0);
+
   console.log("\n=== 5) صفر واتساب حقيقي ===");
   const reportSrc = fs.readFileSync(path.join(ROOT, "lib", "deliveryReport.js"), "utf8");
   check("5: lib/deliveryReport.js مفيهوش أي استدعاء sendMessage - بناء وتنسيق نص بس", !/sendMessage/.test(reportSrc));

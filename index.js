@@ -843,6 +843,7 @@ function watchForTriggers() {
     await maybeSyncPortal();
     await maybeSendPendingItemsReminder();
     await maybeSendDeliveryDailyReport();
+    await maybeSendPrepListDaily();
     // ملحوظة: التقرير التلقائي متوقف بطلب الإدارة - المديرين هم اللي بيطلبوه يدويًا بكتابة "تقرير"
     // (الدالة maybeSendDailyReport باقية تحت من غير استدعاء، لو حبينا نرجّعها تاني في المستقبل)
   }, 2000);
@@ -880,6 +881,29 @@ async function sendDeliveryReportFile(chatId, data) {
   await boundedCall("send-report-file", () => client.sendMessage(chatId, media), 60000);
 }
 
+// قائمة تجهيز البطاقات لفرق التسليم (حسب المنطقة) - بتتبعت يوميًا الساعة 10 صباحًا لموظف/موظفي
+// التجهيز المسجّلين بأمر "اضف رقم تجهيز البطاقات"، منفصلة عن تقرير التوصيل (ملخص + Excel)
+let lastPrepListSentDate = null;
+async function maybeSendPrepListDaily() {
+  const now = new Date();
+  const today = todayStr(now);
+  if (lastPrepListSentDate === today) return;
+  if (now.getHours() < DELIVERY_REPORT_HOUR) return;
+  lastPrepListSentDate = today;
+
+  const recipients = deliveryStore.getPrepRecipients();
+  if (recipients.length === 0) return;
+  const text = formatPrepList(buildFullReport());
+  for (const phone of recipients) {
+    try {
+      await client.sendMessage(`${phone}@c.us`, text);
+    } catch (err) {
+      console.log(`⚠️ فشل إرسال قائمة تجهيز البطاقات لـ ${phone}: ${err.message}`);
+    }
+  }
+  console.log(`📋 اتبعت قائمة تجهيز البطاقات لـ ${recipients.length} رقم.`);
+}
+
 async function maybeSendDeliveryDailyReport() {
   const now = new Date();
   const today = todayStr(now);
@@ -892,12 +916,9 @@ async function maybeSendDeliveryDailyReport() {
 
   try {
     const data = buildFullReport();
-    // الموظف بيستلم قائمة البطاقات المطلوب تجهيزها (ببيانات كل مستفيد) + الملخص + ملف Excel
-    const prepText = formatPrepList(data);
     const text = formatFullReportMessage(data);
     for (const phone of recipients) {
       try {
-        await client.sendMessage(`${phone}@c.us`, prepText);
         await client.sendMessage(`${phone}@c.us`, text);
         if (data.total > 0) await sendDeliveryReportFile(`${phone}@c.us`, data);
       } catch (err) {
@@ -1432,7 +1453,7 @@ client.on("message", async (msg) => {
   // أول سطر في الهاندلر بالكامل - لو الحدث ده مش ظاهر في اللوج خالص لرسالة معينة، يبقى الحدث
   // نفسه مش وصل من واتساب ويب أصلًا (مش مشكلة في كودنا بعد كده) - مفيد جدًا للتشخيص السريع
   console.log(`📩 [message] وصلت رسالة من ${msg.from} (fromMe=${msg.fromMe})`);
-  // تجاهل أي رسالة اتبعتت من رقم البوت نفسه - واتساب ويب أحيانًا (مشكلة معروفة مع الأجهزة
+  // تجاهل أي رسالة اتبعت من رقم البوت نفسه - واتساب ويب أحيانًا (مشكلة معروفة مع الأجهزة
   // المرتبطة/multi-device) بيبعت حدث "message" حتى للرسائل اللي البوت نفسه بعتها (زي رسائل
   // الحملات: استلام البطاقة، تذكير الدرافت...إلخ) مش بس الرسائل الواردة فعلاً. من غير الفلتر ده
   // كان بيحصل إن البوت يستقبل نص رسالته هو نفسه كأنه رسالة من المزارع، ما يطابقش أي خيار من القائمة،
@@ -2250,14 +2271,14 @@ async function handleControlCommand(msg) {
       return;
     }
 
-    // تقرير كل الرسائل اللي اتبعتت النهارده (أو تاريخ معيّن)، مجمّعة حسب النوع
+    // تقرير كل الرسائل اللي اتبعت النهارده (أو تاريخ معيّن)، مجمّعة حسب النوع
     // "ارسالات اليوم" أو "تقرير الارسال اليوم" - وممكن كمان تحدد تاريخ زي "ارسالات 2026-09-06"
     const sendReportMatch = text.match(/^(?:ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال)(?:\s+اليوم)?(?:\s+(\d{4}-\d{2}-\d{2}))?$/i);
     if (sendReportMatch) {
       const dateArg = sendReportMatch[1];
       const summary = sendLog.getDaySummary(dateArg);
       if (summary.total === 0) {
-        await msg.reply(`📭 مفيش أي رسائل اتبعتت بتاريخ ${summary.date}.`);
+        await msg.reply(`📭 مفيش أي رسائل اتبعت بتاريخ ${summary.date}.`);
         return;
       }
       const lines = [`📬 تقرير الإرسال ليوم ${summary.date}:\n`];
@@ -2280,7 +2301,7 @@ async function handleControlCommand(msg) {
       };
       const entries = Object.entries(counts);
       if (entries.length === 0) {
-        await msg.reply("📭 مفيش أي رسائل اتبعتت من نظام البطاقات لحد دلوقتي.");
+        await msg.reply("📭 مفيش أي رسائل اتبعت من نظام البطاقات لحد دلوقتي.");
         return;
       }
       const lines = ["📊 إجمالي عدد المزارعين اللي اتبعتلهم كل نوع رسالة (من أول ما اشتغل النظام):\n"];
@@ -2360,7 +2381,7 @@ async function handleControlCommand(msg) {
         return;
       }
       // مقسّمة حسب تاريخ الإرسال (ترتيب تصاعدي) - بدل قائمة واحدة مسطّحة، عشان تعرف كل دفعة
-      // اتبعتت إمتى بالظبط لو الإرسال كان على أكتر من يوم
+      // اتبعت إمتى بالظبط لو الإرسال كان على أكتر من يوم
       const byDate = {};
       rows.forEach((e) => {
         if (!byDate[e.date]) byDate[e.date] = [];
@@ -2498,7 +2519,7 @@ async function handleControlCommand(msg) {
           "رسالة اختبار - تجاهلها لو وصلتك بالغلط"
         );
         await boundedCall("list-test-send", () => client.sendMessage(`${targetPhone}@c.us`, list), 15000);
-        await msg.reply(`⏳ اتبعتت رسالة القائمة التجريبية لـ ${targetPhone}. تابع مع صاحب الرقم هل ظهرتله كقائمة تفاعلية فعلًا ولا نص عادي/ما وصلتش.`);
+        await msg.reply(`⏳ اتبعت رسالة القائمة التجريبية لـ ${targetPhone}. تابع مع صاحب الرقم هل ظهرتله كقائمة تفاعلية فعلًا ولا نص عادي/ما وصلتش.`);
       } catch (err) {
         await msg.reply(`❌ فشل إرسال القائمة التجريبية: ${err.message}`);
       }
@@ -2610,6 +2631,29 @@ async function handleControlCommand(msg) {
       const phone = removeDeliveryReportMatch[1];
       const removed = deliveryStore.removeReportRecipient(phone);
       await msg.reply(removed ? `✅ تم حذف ${phone} من مستقبلي تقرير التوصيل.` : `ℹ️ الرقم ${phone} مش موجود أصلًا.`);
+      return;
+    }
+
+    // موظف تجهيز البطاقات: إضافة/حذف/عرض أرقامه، وطلب القائمة فورًا
+    const addPrepMatch = toWesternDigits(text).match(/^اضف\s*رقم\s*تجهيز\s*(?:ال)?بطاقات\s+(\d{8,15}(?:@lid)?)$/i);
+    if (addPrepMatch) {
+      const added = deliveryStore.addPrepRecipient(addPrepMatch[1]);
+      await msg.reply(added ? `✅ تمت إضافة ${addPrepMatch[1]} كمستقبل لقائمة تجهيز البطاقات اليومية (الساعة 10 صباحًا).` : `ℹ️ الرقم ${addPrepMatch[1]} مضاف بالفعل.`);
+      return;
+    }
+    const removePrepMatch = toWesternDigits(text).match(/^احذف\s*رقم\s*تجهيز\s*(?:ال)?بطاقات\s+(\d{8,15}(?:@lid)?)$/i);
+    if (removePrepMatch) {
+      const removed = deliveryStore.removePrepRecipient(removePrepMatch[1]);
+      await msg.reply(removed ? `✅ تم حذف ${removePrepMatch[1]} من مستقبلي قائمة التجهيز.` : `ℹ️ الرقم ${removePrepMatch[1]} مش موجود أصلًا.`);
+      return;
+    }
+    if (/^ارقام\s*تجهيز\s*(ال)?بطاقات$/i.test(text)) {
+      const list = deliveryStore.getPrepRecipients();
+      await msg.reply(`📋 مستقبلو قائمة تجهيز البطاقات (10 صباحًا):\n\n${list.length ? list.join("\n") : "لا يوجد"}`);
+      return;
+    }
+    if (/^تجهيز\s*(ال)?بطاقات$/i.test(text)) {
+      await safeReply(msg, formatPrepList(buildFullReport()));
       return;
     }
 
