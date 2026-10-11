@@ -879,7 +879,26 @@ async function sendDeliveryReportFile(chatId, data, kind = "full") {
     buffer.toString("base64"),
     prep ? prepFileName(data.now) : reportFileName(data.now)
   );
-  await boundedCall("send-report-file", () => client.sendMessage(chatId, media), 60000);
+  // معرّف @lid بيفشل مع إرسال الملفات (getChat مكسورة) - بنفضّل رقم الجوال الحقيقي (@c.us) لو معروف
+  const candidates = [];
+  if (/@lid$/.test(chatId)) {
+    const pn = deliveryStore.lookupLid(chatId);
+    if (pn) candidates.push(`${pn}@c.us`);
+  }
+  candidates.push(chatId);
+  let lastErr = null;
+  for (const target of candidates) {
+    try {
+      console.log(`📎 [تقرير] بإرسال ملف Excel (${Math.round(buffer.length / 1024)}KB) إلى ${target}...`);
+      await boundedCall("send-report-file", () => client.sendMessage(target, media, { sendMediaAsDocument: true }), 60000);
+      console.log(`✅ [تقرير] اتبعت ملف Excel إلى ${target}.`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.log(`⚠️ [تقرير] فشل إرسال ملف Excel إلى ${target}: ${err.message}`);
+    }
+  }
+  throw lastErr;
 }
 
 // قائمة تجهيز البطاقات لفرق التسليم (حسب المنطقة) - بتتبعت يوميًا الساعة 10 صباحًا لموظف/موظفي
