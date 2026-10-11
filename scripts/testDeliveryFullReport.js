@@ -45,6 +45,7 @@ async function run() {
   // طلب قديم (5 أيام) = متأخر
   const state = JSON.parse(fs.readFileSync(store.STORE_FILE, "utf8"));
   state.requests.find((r) => r.id === c.id).createdAt = new Date(Date.now() - 5 * 86400000).toISOString();
+  state.requests.find((r) => r.id === a.id).failureReason = "لا يرد على الجوال"; // اتسلّم بعد تعذّر سابق
   fs.writeFileSync(store.STORE_FILE, JSON.stringify(state));
   check("2: excludeFromReports بيرجّع true أول مرة و false بعد كده", store.excludeFromReports(e.id) === true && store.excludeFromReports(e.id) === false);
 
@@ -73,7 +74,7 @@ async function run() {
   const { buildPrepBuffer, prepFileName } = require("../lib/deliveryFullReport");
   const pwb = new ExcelJS.Workbook();
   await pwb.xlsx.load(await buildPrepBuffer(data));
-  check("3ط: أوراق التجهيز (كل البطاقات + 3 مناطق)", pwb.worksheets.map((w) => w.name).join("|") === "كل البطاقات|الشمال|الوسط|الجنوب");
+  check("3ط: أوراق التجهيز (كل البطاقات + 3 مناطق)", pwb.worksheets.map((w) => w.name).join("|") === "كل البطاقات|الشمال|الوسط|الجنوب|تم التوصيل");
   check("3ي: فيها المفتوحين بس (2 + العنوان) وعمود تم التجهيز فاضي", pwb.getWorksheet("كل البطاقات").rowCount === 3 && pwb.getWorksheet("كل البطاقات").getCell("J1").value === "تم التجهيز");
   check("3ك: ورقة الجنوب فيها منى بس", pwb.getWorksheet("الجنوب").rowCount === 2 && pwb.getWorksheet("الجنوب").getCell("B2").value === "منى");
   check("3ل: اسم ملف التجهيز فيه التاريخ", /^البطاقات المطلوب تجهيزها - \d{4}-\d{2}-\d{2}\.xlsx$/.test(prepFileName()));
@@ -82,7 +83,7 @@ async function run() {
   const buffer = await buildFullReportBuffer(data);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
-  check("4: الأوراق الخمسة بالترتيب", wb.worksheets.map((w) => w.name).join("|") === "الملخص|كل الطلبات|الشمال|الوسط|الجنوب");
+  check("4: الأوراق الخمسة بالترتيب", wb.worksheets.map((w) => w.name).join("|") === "الملخص|كل الطلبات|الشمال|الوسط|الجنوب|تم التوصيل");
   const sum = wb.getWorksheet("الملخص");
   check("4ب: بطاقات الأرقام (4 / 1 / 2 / 1)", sum.getCell("A5").value === 4 && sum.getCell("C5").value === 1 && sum.getCell("E5").value === 2 && sum.getCell("G5").value === 1);
   check("4ج: صف إجمالي المناطق قيم ثابتة مش صيغ", sum.getCell("B16").value === 4 && typeof sum.getCell("B16").value === "number");
@@ -94,6 +95,15 @@ async function run() {
   check("4ح: سبب التعذّر ظاهر", all.getCell("J4").value === "لا يرد على الجوال" || all.getCell("J3").value === "لا يرد على الجوال");
   check("4ط: ورقة الجنوب فيها طلب واحد (منى)", wb.getWorksheet("الجنوب").rowCount === 2);
   check("4ي: اسم الملف فيه التاريخ", /^تفاصيل توصيل البطاقات - \d{4}-\d{2}-\d{2}\.xlsx$/.test(reportFileName()));
+
+  const dsh = wb.getWorksheet("تم التوصيل");
+  check("4م: ورقة تم التوصيل فيها أحمد وسبب التعذّر السابق", dsh.rowCount === 2 && dsh.getCell("B2").value === "أحمد" && dsh.getCell("F2").value === "لا يرد على الجوال");
+  let delivRow = 0;
+  sum.eachRow((row, n) => { if (String(row.getCell(1).value || "").includes("البطاقات التي تم توصيلها (1)")) delivRow = n; });
+  check("4ن: كرت المسلَّمة في الملخص (عدد 1 + أحمد + السبب)", delivRow > 0 && sum.getCell(delivRow + 2, 2).value === "أحمد" && sum.getCell(delivRow + 2, 6).value === "لا يرد على الجوال");
+  const pwb2 = new ExcelJS.Workbook();
+  await pwb2.xlsx.load(await buildPrepBuffer(data));
+  check("4س: ملف التجهيز فيه ورقة تم التوصيل بنفس البيانات", pwb2.getWorksheet("تم التوصيل").getCell("B2").value === "أحمد" && formatPrepList(data).includes("تم توصيل: 1 بطاقة"));
 
   console.log("\n=== 5) رقم الطلب من المنصة ===");
   const state2 = JSON.parse(fs.readFileSync(store.STORE_FILE, "utf8"));
