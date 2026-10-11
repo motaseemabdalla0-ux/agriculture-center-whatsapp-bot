@@ -23,7 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
-const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName } = require("./lib/deliveryFullReport");
+const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
@@ -871,12 +871,13 @@ async function maybeSendPendingItemsReminder() {
 // بيبعت تقرير طلبات التوصيل المفتوحة (مقسّم شمال/جنوب/وسط) تلقائيًا كل يوم الساعة
 // DELIVERY_REPORT_HOUR لأي رقم مسجّل بأمر "اضف رقم تقرير التوصيل" - بطلب صريح من الإدارة
 // بيبعت ملف Excel بتفاصيل طلبات التوصيل لمحادثة معيّنة (بيستخدم نفس الـdata اللي اتبنى منها النص)
-async function sendDeliveryReportFile(chatId, data) {
-  const buffer = await buildFullReportBuffer(data);
+async function sendDeliveryReportFile(chatId, data, kind = "full") {
+  const prep = kind === "prep";
+  const buffer = prep ? await buildPrepBuffer(data) : await buildFullReportBuffer(data);
   const media = new MessageMedia(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     buffer.toString("base64"),
-    reportFileName(data.now)
+    prep ? prepFileName(data.now) : reportFileName(data.now)
   );
   await boundedCall("send-report-file", () => client.sendMessage(chatId, media), 60000);
 }
@@ -893,10 +894,13 @@ async function maybeSendPrepListDaily() {
 
   const recipients = deliveryStore.getPrepRecipients();
   if (recipients.length === 0) return;
-  const text = formatPrepList(buildFullReport());
+  const data = buildFullReport();
+  const text = formatPrepList(data);
+  const hasOpen = data.rows.some((r) => r.status === "NEW");
   for (const phone of recipients) {
     try {
       await client.sendMessage(`${phone}@c.us`, text);
+      if (hasOpen) await sendDeliveryReportFile(`${phone}@c.us`, data, "prep");
     } catch (err) {
       console.log(`⚠️ فشل إرسال قائمة تجهيز البطاقات لـ ${phone}: ${err.message}`);
     }
@@ -2653,7 +2657,13 @@ async function handleControlCommand(msg) {
       return;
     }
     if (/^تجهيز\s*(ال)?بطاقات$/i.test(text)) {
-      await safeReply(msg, formatPrepList(buildFullReport()));
+      try {
+        const data = buildFullReport();
+        await safeReply(msg, formatPrepList(data));
+        if (data.rows.some((r) => r.status === "NEW")) await sendDeliveryReportFile(msg.from, data, "prep");
+      } catch (err) {
+        await safeReply(msg, `⚠️ تعذّر تجهيز قائمة التجهيز: ${err.message}`);
+      }
       return;
     }
 

@@ -69,6 +69,15 @@ async function run() {
   check("3و: المتأخر عليه علامة تنبيه", /سعد ⚠️/.test(prep));
   check("3ز: لو مفيش مفتوح -> رسالة واضحة", formatPrepList({ ...data, rows: [] }).includes("لا توجد بطاقات مطلوب تجهيزها"));
 
+  check("3ح: صيغة الأيام بالعربي (منذ 5 أيام)", prep.includes("منذ 5 أيام"));
+  const { buildPrepBuffer, prepFileName } = require("../lib/deliveryFullReport");
+  const pwb = new ExcelJS.Workbook();
+  await pwb.xlsx.load(await buildPrepBuffer(data));
+  check("3ط: أوراق التجهيز (كل البطاقات + 3 مناطق)", pwb.worksheets.map((w) => w.name).join("|") === "كل البطاقات|الشمال|الوسط|الجنوب");
+  check("3ي: فيها المفتوحين بس (2 + العنوان) وعمود تم التجهيز فاضي", pwb.getWorksheet("كل البطاقات").rowCount === 3 && pwb.getWorksheet("كل البطاقات").getCell("J1").value === "تم التجهيز");
+  check("3ك: ورقة الجنوب فيها منى بس", pwb.getWorksheet("الجنوب").rowCount === 2 && pwb.getWorksheet("الجنوب").getCell("B2").value === "منى");
+  check("3ل: اسم ملف التجهيز فيه التاريخ", /^البطاقات المطلوب تجهيزها - \d{4}-\d{2}-\d{2}\.xlsx$/.test(prepFileName()));
+
   console.log("\n=== 4) ملف Excel ===");
   const buffer = await buildFullReportBuffer(data);
   const wb = new ExcelJS.Workbook();
