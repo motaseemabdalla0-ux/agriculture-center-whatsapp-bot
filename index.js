@@ -677,7 +677,7 @@ async function maybeSyncPortal() {
     console.log(`🔄 [نظام البطاقات] ${resultText}`);
     // بعد المزامنة: تأكيد تسليم طلبات التوصيل من تاب "Delivered" في المنصة (من غير ما نستنى الموظف)
     try {
-      const reconcileText = await reconcileDeliveriesWithPortal();
+      const reconcileText = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000);
       console.log(`🚚 [تسليم المنصة] ${reconcileText}`);
     } catch (err) {
       console.log(`⚠️ [تسليم المنصة] تعذّر الفحص: ${err.message}`);
@@ -693,7 +693,7 @@ async function refreshDeliveriesBeforeReport() {
   if (broadcastInProgress) return;
   broadcastInProgress = true;
   try {
-    console.log(`🚚 [تسليم المنصة] ${await reconcileDeliveriesWithPortal()} (قبل التقرير اليومي)`);
+    console.log(`🚚 [تسليم المنصة] ${await boundedCall("deliveries-refresh", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000)} (قبل التقرير اليومي)`);
   } catch (err) {
     console.log(`⚠️ [تسليم المنصة] تعذّر التحديث قبل التقرير - هنكمّل بالبيانات الحالية: ${err.message}`);
   } finally {
@@ -2721,7 +2721,7 @@ async function handleControlCommand(msg) {
       let reply;
       broadcastInProgress = true;
       try {
-        const text2 = await reconcileDeliveriesWithPortal();
+        const text2 = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000);
         const updated = reconcileDeliveriesWithPortal.lastUpdated || [];
         reply = `✅ ${text2}${updated.length ? "\n\n" + updated.map((u) => `• ${u.id} - ${u.name || u.phone}`).join("\n") : ""}`;
       } catch (err) {
