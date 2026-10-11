@@ -61,6 +61,14 @@ async function run() {
   check("3ب: تنبيه المتأخر ظاهر", text.includes("⚠️ تنبيه: 1 طلبات مفتوحة منذ أكثر من 3 أيام"));
   check("3ج: مفيش أسماء مزارعين في الرسالة", !text.includes("أحمد") && !text.includes("خالد"));
 
+  console.log("\n=== 3د) قائمة التجهيز للموظف ===");
+  const { formatPrepList } = require("../lib/deliveryFullReport");
+  const prep = formatPrepList(data);
+  check("3د: فيها المفتوحين بس (سعد ومنى) ببياناتهم", prep.includes("سعد") && prep.includes("منى") && prep.includes("966503333333") && prep.includes("إجمالي البطاقات المطلوب تجهيزها: 2"));
+  check("3هـ: مفيش المسلَّم ولا المتعذّر ولا التجريبي", !prep.includes("أحمد") && !prep.includes("خالد") && !prep.includes("تجريبي"));
+  check("3و: المتأخر عليه علامة تنبيه", /سعد ⚠️/.test(prep));
+  check("3ز: لو مفيش مفتوح -> رسالة واضحة", formatPrepList({ ...data, rows: [] }).includes("لا توجد بطاقات مطلوب تجهيزها"));
+
   console.log("\n=== 4) ملف Excel ===");
   const buffer = await buildFullReportBuffer(data);
   const wb = new ExcelJS.Workbook();

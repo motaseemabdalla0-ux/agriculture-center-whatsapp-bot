@@ -23,7 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
-const { buildFullReport, formatFullReportMessage, buildFullReportBuffer, reportFileName } = require("./lib/deliveryFullReport");
+const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
@@ -892,9 +892,12 @@ async function maybeSendDeliveryDailyReport() {
 
   try {
     const data = buildFullReport();
+    // الموظف بيستلم قائمة البطاقات المطلوب تجهيزها (ببيانات كل مستفيد) + الملخص + ملف Excel
+    const prepText = formatPrepList(data);
     const text = formatFullReportMessage(data);
     for (const phone of recipients) {
       try {
+        await client.sendMessage(`${phone}@c.us`, prepText);
         await client.sendMessage(`${phone}@c.us`, text);
         if (data.total > 0) await sendDeliveryReportFile(`${phone}@c.us`, data);
       } catch (err) {
