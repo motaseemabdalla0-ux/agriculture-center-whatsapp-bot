@@ -685,10 +685,28 @@ async function maybeSyncPortal() {
   });
 }
 
+// قبل أي تقرير يومي (توصيل/تجهيز) بنحدّث تسليم الطلبات من المنصة عشان التقرير يعكس آخر وضع فعلي.
+// لو فيه فحص حصل في آخر 10 دقائق، أو مهمة تانية شغّالة، أو المنصة مش متظبّطة - بنكمّل بالبيانات الحالية
+async function refreshDeliveriesBeforeReport() {
+  if (!portalSync.isConfigured()) return;
+  if (Date.now() - lastDeliveryReconcileAt < 10 * 60 * 1000) return;
+  if (broadcastInProgress) return;
+  broadcastInProgress = true;
+  try {
+    console.log(`🚚 [تسليم المنصة] ${await reconcileDeliveriesWithPortal()} (قبل التقرير اليومي)`);
+  } catch (err) {
+    console.log(`⚠️ [تسليم المنصة] تعذّر التحديث قبل التقرير - هنكمّل بالبيانات الحالية: ${err.message}`);
+  } finally {
+    broadcastInProgress = false;
+  }
+}
+
 // بيقرا تاب "Delivered" من المنصة ويطابقه مع طلبات التوصيل المفتوحة/المتعذّرة، وأي طلب ظاهر
 // هناك بيتسجّل "تم التوصيل" (مصدره "portal") - مع إشعار في مجموعة منطقته. بيرجّع نص ملخّص
+let lastDeliveryReconcileAt = 0;
 async function reconcileDeliveriesWithPortal() {
-  const open = deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
+  lastDeliveryReconcileAt = Date.now();
+  const open =deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
   if (open.length === 0) return "مفيش طلبات توصيل مفتوحة للفحص.";
   const rows = await require("./lib/portalScraper").fetchDeliveredRows();
   const updated = applyDeliveredFromPortal(rows, platformNumberFor);
@@ -943,6 +961,7 @@ async function maybeSendPrepListDaily() {
 
   const recipients = deliveryStore.getPrepRecipients();
   if (recipients.length === 0) return;
+  await refreshDeliveriesBeforeReport();
   const data = buildFullReport();
   const text = formatPrepList(data);
   const hasOpen = data.rows.some((r) => r.status === "NEW");
@@ -966,6 +985,7 @@ async function maybeSendDeliveryDailyReport() {
 
   const recipients = deliveryStore.getReportRecipients();
   if (recipients.length === 0) return;
+  await refreshDeliveriesBeforeReport();
 
   try {
     const data = buildFullReport();
