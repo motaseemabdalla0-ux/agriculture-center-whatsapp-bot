@@ -40,6 +40,8 @@ const TEXTS = {
   DELIVERY_LOCATION_UNKNOWN: "LOCATION_UNKNOWN",
   DELIVERY_ASK_DATETIME: "ASK_DATETIME",
   DELIVERY_REMINDER_DATETIME: "REMIND_DATETIME",
+  DELIVERY_NEED_DAY: "NEED_DAY",
+  DELIVERY_NEED_TIME: "NEED_TIME",
   DELIVERY_REGION_CORRECTED: "REGION_CORRECTED {region}",
   DELIVERY_OUTSIDE_HOURS: "OUTSIDE_HOURS",
   DELIVERY_OUTSIDE_DAYS: "OUTSIDE_DAYS",
@@ -162,6 +164,19 @@ async function run() {
   const sent2 = [];
   await flow.forwardRequest({ sendMessage: async (to) => { sent2.push(to); } }, r3.request);
   check("5ح: منطقة 1 = الشمال (اختيار يدوي بعد فشل الموقع) -> مجموعة الشمال، رسالة نصية بس (من غير pin - المنطقة اتحددت يدويًا مش من موقع)", sent2.length === 1 && sent2[0] === "111@g.us");
+
+  console.log("\n=== 5ي) لازم يوم ووقت صريحين (المزارعين بيكتبوا أي كلام) ===");
+  const SLOT_PHONE = "966506666666";
+  store.markAwaitingChoice(SLOT_PHONE, "تجربة");
+  flow.handleReply(SLOT_PHONE, "2", getText);
+  flow.handleLocation(SLOT_PHONE, 25.7152, 38.6513, getText);
+  check("5ي: كلام عشوائي (جيب) -> تذكير بيوم ووقت", flow.handleReply(SLOT_PHONE, "جيب", getText).reply === "REMIND_DATETIME" && store.getPending(SLOT_PHONE).step === "DATETIME");
+  check("5ي2: يوم من غير وقت (الأحد) -> NEED_TIME", flow.handleReply(SLOT_PHONE, "الأحد", getText).reply === "NEED_TIME");
+  check("5ي3: وقت من غير يوم -> NEED_DAY", flow.handleReply(SLOT_PHONE, "الساعة 10 صباحًا", getText).reply === "NEED_DAY");
+  check("5ي4: الأسبوع الجاي -> تذكير", flow.handleReply(SLOT_PHONE, "الأسبوع الجاي", getText).reply === "REMIND_DATETIME");
+  check("5ي5: الحالة لسه DATETIME ومفيش طلب اتسجّل", store.getPending(SLOT_PHONE).step === "DATETIME");
+  const okSlot = flow.handleReply(SLOT_PHONE, "الأحد 10", getText);
+  check("5ي6: الأحد 10 -> مقبول وبيتسجّل الطلب", okSlot.request && okSlot.request.preferredDateTime === "الأحد 10");
 
   console.log("\n=== 6) مجموعة مش مربوطة أو فشل إرسال: الطلب ما بيضيعش ===");
   fs.unlinkSync(path.join(ROOT, "delivery_state.json"));
