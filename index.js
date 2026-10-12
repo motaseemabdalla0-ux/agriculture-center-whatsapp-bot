@@ -721,7 +721,8 @@ async function reconcileDeliveriesWithPortal() {
       console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
     }
   }
-  const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
+  const expectedNote = rows.expected && rows.expected !== rows.length ? ` (⚠️ التاب بيعرض ${rows.expected} - القراءة ناقصة)` : "";
+  const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة${expectedNote}، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
   reconcileDeliveriesWithPortal.lastUpdated = updated;
   return text;
 }
