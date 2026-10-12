@@ -38,6 +38,7 @@ const portalSync = require("./lib/portalSync");
 const codeUpdateWatcher = require("./lib/codeUpdateWatcher");
 const gitAutoUpdate = require("./updater/gitAutoUpdate");
 const sendLog = require("./lib/sendLog");
+const campaignCheck = require("./lib/campaignCheck");
 const sentTracker = require("./lib/sentTracker");
 const { parseCsv, csvField } = require("./lib/csvUtil");
 const farmerState = require("./lib/farmerState");
@@ -2439,6 +2440,46 @@ async function handleControlCommand(msg) {
 
     // بيوري كل المزارعين اللي اتبعتلهم نوع رسالة معيّن بنجاح، على مر الوقت (مش بس النهارده) -
     // زي "اسماء استلام البطاقة" أو "اسماء تذكير درافت" أو "اسماء رسالة مخصصة"
+    // فحص أرقام معيّنة: "تحقق ارسال الدرافت" + الأرقام (سطر لكل رقم أو مفصولة بمسافات) - بيوري لكل
+    // رقم هل اتبعتله فعلًا، ولو لأ سبب المنع. قراءة بس، مفيش إرسال لأي حد
+    const checkSendMatch = toWesternDigits(text).match(/^تحقق\s*(?:من\s*)?ارسال\s+(الدرافت|درافت|تذكير\s*(?:ال)?درافت|استلام\s*(?:ال)?بطاقه?|استلام\s*(?:ال)?بطاقة)\s*([\s\S]+)$/i);
+    if (checkSendMatch) {
+      const kind = checkSendMatch[1].replace(/\s+/g, " ");
+      const isDraft = /درافت/.test(kind);
+      const label = isDraft ? "تذكير درافت" : "استلام البطاقة";
+      const campaignType = isDraft ? "draft_reminder" : "card_pickup";
+      const phones = campaignCheck.extractPhones(checkSendMatch[2]);
+      if (phones.length === 0) {
+        await safeReply(msg, "⚠️ ما لقيت أي رقم جوال سعودي صالح في الرسالة.");
+        return;
+      }
+      // أرقام الملف الحالي (draft_forms.csv / card_pickup.csv) - الدور لسه ما جاش
+      const inCurrentFile = new Set();
+      try {
+        const csvPath = isDraft ? DRAFT_FORMS_CSV : path.join(__dirname, "card_pickup.csv");
+        if (fs.existsSync(csvPath)) {
+          fs.readFileSync(csvPath, "utf8").split(/\r?\n/).forEach((l) => {
+            const m = l.match(/9665\d{8}/);
+            if (m) inCurrentFile.add(m[0]);
+          });
+        }
+      } catch {
+        // الملف مش ضروري للفحص
+      }
+      const results = campaignCheck.checkPhones(phones, {
+        sentRows: sendLog.getAllByLabel(label),
+        auditEntries: require("./lib/auditLog").readAll(),
+        campaignType,
+        inCurrentFile,
+      });
+      let reply = campaignCheck.formatCheck(label, results);
+      if (isDraft && results.some((r) => !r.sent)) {
+        reply += `\n\nℹ️ رسائل الدرافت محدودة بـ${portalSync.DAILY_LIMIT} مزارعين في اليوم، فالباقي بيتبعت في الأيام اللي بعد كده (بيترجع الحد كل يوم).`;
+      }
+      await safeReply(msg, reply);
+      return;
+    }
+
     const namesMatch = text.match(/^اسماء\s+(.+)$/i);
     if (namesMatch) {
       const requestedLabel = namesMatch[1].trim();
