@@ -178,6 +178,15 @@ async function run() {
   const okSlot = flow.handleReply(SLOT_PHONE, "الأحد 10", getText);
   check("5ي6: الأحد 10 -> مقبول وبيتسجّل الطلب", okSlot.request && okSlot.request.preferredDateTime === "الأحد 10");
 
+  console.log("\n=== 5ك) موقع مباشرة في خطوة الاختيار (من غير ما يرد 1/2) = توصيل ===");
+  const LOC_PHONE = "966507777777";
+  store.markAwaitingChoice(LOC_PHONE, "موقع مباشر");
+  let lr = flow.handleLocation(LOC_PHONE, 25.7152, 38.6513, getText);
+  check("5ك: موقع وهو في CHOICE -> بيتحدد الجنوب وينتقل لليوم/الوقت", lr.handled && lr.reply === "ASK_DATETIME" && store.getPending(LOC_PHONE).step === "DATETIME" && store.getPending(LOC_PHONE).regionKey === "SOUTH");
+  store.markAwaitingChoice("966508000001", "برّه");
+  lr = flow.handleLocation("966508000001", 10.0, 10.0, getText);
+  check("5ك2: موقع برّه كل المناطق في CHOICE -> LOCATION_UNKNOWN وبيفتح fallback اليدوي", lr.reply === "LOCATION_UNKNOWN" && store.getPending("966508000001").step === "REGION" && store.getPending("966508000001").locationFailed === true);
+
   console.log("\n=== 6) مجموعة مش مربوطة أو فشل إرسال: الطلب ما بيضيعش ===");
   fs.unlinkSync(path.join(ROOT, "delivery_state.json"));
   if (fs.existsSync(path.join(ROOT, "delivery_state.json.bak"))) fs.unlinkSync(path.join(ROOT, "delivery_state.json.bak"));
