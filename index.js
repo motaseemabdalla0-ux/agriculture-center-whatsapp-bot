@@ -39,6 +39,7 @@ const codeUpdateWatcher = require("./lib/codeUpdateWatcher");
 const gitAutoUpdate = require("./updater/gitAutoUpdate");
 const sendLog = require("./lib/sendLog");
 const campaignCheck = require("./lib/campaignCheck");
+const cardNoticeVerify = require("./lib/cardNoticeVerify");
 const sentTracker = require("./lib/sentTracker");
 const { parseCsv, csvField } = require("./lib/csvUtil");
 const farmerState = require("./lib/farmerState");
@@ -624,6 +625,8 @@ async function runPortalSyncOnce() {
       await sendCardPickupBroadcast();
       summary.printed = printedResult.count;
     }
+    // تحقق إن كل بطاقة جاهزة اتبعتلها إشعار الاستلام فعلًا - وأي مشكلة بتتبلّغ لموظف التجهيز
+    await verifyCardNotices(printedResult.rows);
 
     // 2) قسم الرفيو/الطلبات الجديدة (الأولوية الثانية) - بدون حد أقصى، ويستبعد أي حد أصلًا في قسم البطاقات
     const pendingResult = await portalSync.syncPendingPrintingRequests(Infinity, cardKeys);
@@ -704,6 +707,48 @@ async function refreshDeliveriesBeforeReport() {
 
 // بيقرا تاب "Delivered" من المنصة ويطابقه مع طلبات التوصيل المفتوحة/المتعذّرة، وأي طلب ظاهر
 // هناك بيتسجّل "تم التوصيل" (مصدره "portal") - مع إشعار في مجموعة منطقته. بيرجّع نص ملخّص
+// رقم موظف تجهيز البطاقات اللي بتوصله تنبيهات مشاكل إرسال إشعار الاستلام (+ أي رقم مسجّل بأمر
+// "اضف رقم تجهيز البطاقات")
+const CARD_ISSUE_ALERT_DEFAULT = "966535571579";
+
+// بعد كل مزامنة: كل بطاقة جاهزة (Printed/Pending Delivery) لازم يكون وصلها إشعار "جاهزة للاستلام".
+// اللي ما وصلهاش بيتحدّد سببه (مش على واتساب/رقم غلط/اسم غير عربي...) وبيتبعت تنبيه لموظف التجهيز
+async function verifyCardNotices(rows) {
+  try {
+    const decisions = new Map();
+    require("./lib/auditLog").readAll().forEach((e) => {
+      if (e.campaignType === "card_pickup" && e.normalizedPhone) decisions.set(e.normalizedPhone, e);
+    });
+    const result = cardNoticeVerify.verify(rows, {
+      hasBeenSent: (phone) => sentTracker.hasBeenSent("card_pickup", phone),
+      lastDecision: (phone) => decisions.get(phone) || null,
+    });
+    const real = result.problems.filter((p) => !p.temporary);
+    console.log(`📬 [تحقق الإشعارات] ${result.total} بطاقة جاهزة: وصل الإشعار لـ ${result.sent}، مشاكل: ${real.length}${result.problems.length > real.length ? ` (+${result.problems.length - real.length} مؤقتة بسبب حد الإرسال)` : ""}.`);
+
+    const state = cardNoticeVerify.loadIssueState();
+    const toNotify = cardNoticeVerify.selectToNotify(result.problems, state);
+    if (toNotify.length > 0) {
+      const recipients = [...new Set([...deliveryStore.getPrepRecipients(), CARD_ISSUE_ALERT_DEFAULT])];
+      const text = cardNoticeVerify.formatAlert(result, toNotify);
+      let delivered = 0;
+      for (const phone of recipients) {
+        try {
+          await boundedCall("card-issue-alert", () => client.sendMessage(`${phone}@c.us`, text), 20000);
+          delivered++;
+        } catch (err) {
+          console.log(`⚠️ [تحقق الإشعارات] فشل إرسال التنبيه لـ ${phone}: ${err.message}`);
+        }
+      }
+      if (delivered > 0) cardNoticeVerify.markNotified(toNotify, state);
+    }
+    cardNoticeVerify.pruneResolved(result.problems, state);
+    cardNoticeVerify.saveIssueState(state);
+  } catch (err) {
+    console.log(`⚠️ [تحقق الإشعارات] تعذّر التحقق: ${err.message}`);
+  }
+}
+
 let lastDeliveryReconcileAt = 0;
 async function reconcileDeliveriesWithPortal() {
   lastDeliveryReconcileAt = Date.now();
