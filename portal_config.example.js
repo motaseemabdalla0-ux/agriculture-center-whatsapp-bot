@@ -11,5 +11,5 @@ module.exports = {
   DRAFT_FORMS_URL: "https://agriculture.rcu.gov.sa/portals/smartcard-registration-form",
 
   // كل قد إيه (بالدقايق) البوت يدخل يفحص النظام ويشوف فيه بطاقات جاهزة/طلبات جديدة/درافت
-  CHECK_INTERVAL_MINUTES: 60,
+  CHECK_INTERVAL_MINUTES: 30,
 };

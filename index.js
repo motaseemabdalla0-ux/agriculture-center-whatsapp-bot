@@ -666,9 +666,11 @@ async function maybeSyncPortal() {
 
   const cfgIntervalMinutes = (() => {
     try {
-      return require("./portal_config").CHECK_INTERVAL_MINUTES || 60;
+      // بطلب من الإدارة: مزامنة المنصة كل نص ساعة. الحد الأقصى 30 دقيقة حتى لو الإعداد القديم 60؛
+      // ولو الإعداد أقل (مثلًا 15) بنحترمه
+      return Math.min(require("./portal_config").CHECK_INTERVAL_MINUTES || 30, 30);
     } catch {
-      return 60;
+      return 30;
     }
   })();
 
