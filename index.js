@@ -23,7 +23,7 @@ const {
 } = require("./lib/activityLog");
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
-const { applyDeliveredFromPortal, saveDeliveredSnapshot } = require("./lib/portalDeliveryCheck");
+const { applyDeliveredFromPortal, saveDeliveredSnapshot, matchDelivered } = require("./lib/portalDeliveryCheck");
 const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
@@ -678,7 +678,7 @@ async function maybeSyncPortal() {
     console.log(`🔄 [نظام البطاقات] ${resultText}`);
     // بعد المزامنة: تأكيد تسليم طلبات التوصيل من تاب "Delivered" في المنصة (من غير ما نستنى الموظف)
     try {
-      const reconcileText = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000);
+      const reconcileText = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 9 * 60 * 1000);
       console.log(`🚚 [تسليم المنصة] ${reconcileText}`);
     } catch (err) {
       console.log(`⚠️ [تسليم المنصة] تعذّر الفحص: ${err.message}`);
@@ -694,7 +694,7 @@ async function refreshDeliveriesBeforeReport() {
   if (broadcastInProgress) return;
   broadcastInProgress = true;
   try {
-    console.log(`🚚 [تسليم المنصة] ${await boundedCall("deliveries-refresh", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000)} (قبل التقرير اليومي)`);
+    console.log(`🚚 [تسليم المنصة] ${await boundedCall("deliveries-refresh", () => reconcileDeliveriesWithPortal(), 9 * 60 * 1000)} (قبل التقرير اليومي)`);
   } catch (err) {
     console.log(`⚠️ [تسليم المنصة] تعذّر التحديث قبل التقرير - هنكمّل بالبيانات الحالية: ${err.message}`);
   } finally {
@@ -708,7 +708,21 @@ let lastDeliveryReconcileAt = 0;
 async function reconcileDeliveriesWithPortal() {
   lastDeliveryReconcileAt = Date.now();
   const open = deliveryStore.getAllRequests().filter((r) => r.status === "NEW" || r.status === "FAILED_DELIVERY");
-  const rows = await require("./lib/portalScraper").fetchDeliveredRows();
+  const scraper = require("./lib/portalScraper");
+  const rows = await scraper.fetchDeliveredRows();
+  const expected = rows.expected;
+  // لو القراءة ناقصة (الترقيم ما اشتغلش) نبحث بالجوال في تاب Delivered عن الطلبات اللي لسه مفتوحة بس
+  if (expected && rows.length < expected && open.length > 0) {
+    const matchedIds = new Set(matchDelivered(open, rows, platformNumberFor).map((m) => m.request.id));
+    const phones = [...new Set(open.filter((r) => !matchedIds.has(r.id)).map((r) => r.phone))];
+    if (phones.length) {
+      console.log(`🔎 [تسليم المنصة] القراءة ناقصة (${rows.length}/${expected}) - بحث بالجوال لـ${phones.length} طلب مفتوح...`);
+      const extra = await boundedCall("deliveries-search", () => scraper.fetchDeliveredByPhones(phones), 5 * 60 * 1000);
+      extra.forEach((r) => rows.push(r));
+    }
+    rows.expected = expected;
+    rows.searched = true;
+  }
   saveDeliveredSnapshot(rows);
   const updated = applyDeliveredFromPortal(rows, platformNumberFor);
   const groups = deliveryStore.getGroups();
@@ -721,7 +735,7 @@ async function reconcileDeliveriesWithPortal() {
       console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
     }
   }
-  const expectedNote = rows.expected && rows.expected !== rows.length ? ` (⚠️ التاب بيعرض ${rows.expected} - القراءة ناقصة)` : "";
+  const expectedNote = rows.searched ? ` (التاب بيعرض ${rows.expected}، قرأنا بالترقيم جزء وبحثنا بالجوال عن الطلبات المفتوحة)` : rows.expected && rows.expected !== rows.length ? ` (⚠️ التاب بيعرض ${rows.expected} - القراءة ناقصة)` : "";
   const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة${expectedNote}، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
   reconcileDeliveriesWithPortal.lastUpdated = updated;
   return text;
@@ -2769,7 +2783,7 @@ async function handleControlCommand(msg) {
       let reply;
       broadcastInProgress = true;
       try {
-        const text2 = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 4 * 60 * 1000);
+        const text2 = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 9 * 60 * 1000);
         const updated = reconcileDeliveriesWithPortal.lastUpdated || [];
         reply = `✅ ${text2}${updated.length ? "\n\n" + updated.map((u) => `• ${u.id} - ${u.name || u.phone}`).join("\n") : ""}`;
       } catch (err) {
