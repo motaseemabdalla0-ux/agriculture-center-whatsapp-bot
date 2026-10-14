@@ -123,7 +123,7 @@ async function run() {
   // لكن موقعه الفعلي (Al Ibriq) في الجنوب فعليًا - المفروض يصحح المنطقة تلقائيًا
   r = flow.handleLocation("966502444444", 25.7152, 38.6513, getText);
   check("4ع: موقع فعلي مختلف عن الاختيار اليدوي -> تصحيح تلقائي للمنطقة الصح (الجنوب) وفضل في خطوة اليوم/الوقت", r.handled && !r.request && r.reply === "REGION_CORRECTED الجنوب" && store.getPending("966502444444").step === "DATETIME" && store.getPending("966502444444").regionKey === "SOUTH" && store.getPending("966502444444").autoDetected === true && store.getPending("966502444444").district === "Al Ibriq");
-  r = flow.handleReply("966502444444", "الثلاثاء ظهرًا", getText);
+  r = flow.handleReply("966502444444", "الأربعاء ظهرًا", getText);
   check("4ف: الطلب النهائي اتسجّل بالمنطقة المصحَّحة (الجنوب) مش المنطقة اليدوية الأصلية (الشمال)", r.request && r.request.regionKey === "SOUTH" && r.request.autoDetected === true);
   // موقع تاني بعد ما المنطقة اتصححت بالفعل ونفس المنطقة (الجنوب) - مفيش "تصحيح" يتقال، رد عادي
   store.markAwaitingChoice("966502555555", "هند");
@@ -171,7 +171,7 @@ async function run() {
   flow.handleReply(SLOT_PHONE, "2", getText);
   flow.handleLocation(SLOT_PHONE, 25.7152, 38.6513, getText);
   check("5ي: كلام عشوائي (جيب) -> تذكير بيوم ووقت", flow.handleReply(SLOT_PHONE, "جيب", getText).reply === "REMIND_DATETIME" && store.getPending(SLOT_PHONE).step === "DATETIME");
-  check("5ي2: يوم من غير وقت (الأحد) -> NEED_TIME", flow.handleReply(SLOT_PHONE, "الأحد", getText).reply === "NEED_TIME");
+  check("5ي2: يوم غير متاح (الاثنين) -> OUTSIDE_DAYS", flow.handleReply(SLOT_PHONE, "الاثنين", getText).reply === "OUTSIDE_DAYS");
   check("5ي3: وقت من غير يوم -> NEED_DAY", flow.handleReply(SLOT_PHONE, "الساعة 10 صباحًا", getText).reply === "NEED_DAY");
   check("5ي4: الأسبوع الجاي -> تذكير", flow.handleReply(SLOT_PHONE, "الأسبوع الجاي", getText).reply === "REMIND_DATETIME");
   check("5ي5: الحالة لسه DATETIME ومفيش طلب اتسجّل", store.getPending(SLOT_PHONE).step === "DATETIME");
@@ -194,7 +194,7 @@ async function run() {
   flow.handleReply("966504444444", "2", getText);
   flow.handleLocation("966504444444", 22.0, 39.0, getText); // فشل الموقع الأول - بيفتح الـfallback اليدوي
   flow.handleReply("966504444444", "3", getText);
-  const r4 = flow.handleReply("966504444444", "الخميس بعد الظهر", getText);
+  const r4 = flow.handleReply("966504444444", "الأربعاء بعد الظهر", getText);
   const noSend = [];
   const res4 = await flow.forwardRequest({ sendMessage: async (to) => noSend.push(to) }, r4.request);
   check("6: مفيش مجموعة مربوطة -> مفيش إرسال والطلب محفوظ بتنبيه", !res4.ok && noSend.length === 0 && store.listOpenRequests()[0].forwarded === false);
