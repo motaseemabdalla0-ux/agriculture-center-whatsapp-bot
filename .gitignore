@@ -72,3 +72,6 @@ delivery_state.json.bak
 portal_delivered_snapshot.json
 card_notice_issues.json
 farmer_card_snapshots.json
+production_survey.csv
+survey_state.json
+production-survey-log.txt

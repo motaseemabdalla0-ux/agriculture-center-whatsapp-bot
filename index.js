@@ -40,6 +40,8 @@ const gitAutoUpdate = require("./updater/gitAutoUpdate");
 const sendLog = require("./lib/sendLog");
 const campaignCheck = require("./lib/campaignCheck");
 const cardNoticeVerify = require("./lib/cardNoticeVerify");
+const surveyRecipients = require("./lib/surveyRecipients");
+const { isArabicName } = require("./lib/arabicNameGuard");
 const sentTracker = require("./lib/sentTracker");
 const { parseCsv, csvField } = require("./lib/csvUtil");
 const farmerState = require("./lib/farmerState");
@@ -685,6 +687,7 @@ async function maybeSyncPortal() {
     try {
       const reconcileText = await boundedCall("deliveries-reconcile", () => reconcileDeliveriesWithPortal(), 9 * 60 * 1000);
       console.log(`🚚 [تسليم المنصة] ${reconcileText}`);
+      await autoSendSurvey(reconcileDeliveriesWithPortal.lastRows);
     } catch (err) {
       console.log(`⚠️ [تسليم المنصة] تعذّر الفحص: ${err.message}`);
     }
@@ -751,6 +754,51 @@ async function verifyCardNotices(rows) {
   }
 }
 
+// ===== استبيان الإنتاج الزراعي للمزارعين اللي استلموا بطاقاتهم =====
+// المصدر: تاب "Delivered" في المنصة. الاسم لازم عربي موثوق (طلب توصيل سابق بالجوال، أو سجل المزارعين،
+// أو الاسم العربي من تفاصيل المنصة) - غير كده الرسالة بتتمنع (BLOCKED_NON_ARABIC_NAME) زي باقي الحملات.
+const SURVEY_CSV = path.join(__dirname, "production_survey.csv");
+const SURVEY_AUTO_BATCH = 10; // أقصى عدد بيتبعتلهم تلقائيًا في كل مزامنة (حماية من حظر واتساب)
+
+function resolveSurveyName(phone, candidate) {
+  const req = deliveryStore.getAllRequests().find((r) => r.phone === phone && r.name && isArabicName(r.name));
+  if (req) return req.name;
+  return farmerRegistry.resolveTrustedArabicName(phone, candidate);
+}
+
+function selectSurvey(rows, limit = Infinity) {
+  return surveyRecipients.selectSurveyRecipients(
+    rows,
+    { hasBeenSent: (phone) => sentTracker.hasBeenSent("production_survey", phone), resolveName: resolveSurveyName },
+    limit
+  );
+}
+
+async function sendProductionSurveyBroadcast() {
+  return runPersonalizedBroadcast(client, {
+    csvPath: SURVEY_CSV,
+    columns: ["name", "phone"],
+    template: getCfgText("PRODUCTION_SURVEY_TEMPLATE"),
+    logFile: path.join(__dirname, "production-survey-log.txt"),
+    logLabel: "استبيان الإنتاج",
+    campaignType: "production_survey",
+    messageSource: "CAMPAIGN",
+  });
+}
+
+// تلقائيًا بعد كل فحص تسليم: أي مزارع ظاهر "Delivered" ولسه ما اتبعتلوش الاستبيان بيتبعتله (بس لو
+// الإرسال التلقائي اتفعّل بتأكيد صريح من الأدمن، عشان ما نبعتش لكل المستلمين القدام من غير موافقة)
+async function autoSendSurvey(rows) {
+  const state = surveyRecipients.loadState();
+  if (!state.autoEnabled || !Array.isArray(rows) || rows.length === 0) return;
+  const sel = selectSurvey(rows, SURVEY_AUTO_BATCH);
+  if (sel.blocked.length) console.log(`📝 [استبيان] ${sel.blocked.length} مزارع مستلم بدون اسم عربي موثوق - مش هيتبعتلهم (راجع "حالة استبيان المستلمين").`);
+  if (sel.send.length === 0) return;
+  fs.writeFileSync(SURVEY_CSV, farmerRowsToCsvText(sel.send.map((r) => ({ name: r.name, phone: r.phone })), false), "utf8");
+  console.log(`📢 [استبيان] بإرسال الاستبيان لـ ${sel.send.length} مزارع استلموا بطاقاتهم حديثًا...`);
+  await sendProductionSurveyBroadcast();
+}
+
 let lastDeliveryReconcileAt = 0;
 async function reconcileDeliveriesWithPortal() {
   lastDeliveryReconcileAt = Date.now();
@@ -771,6 +819,7 @@ async function reconcileDeliveriesWithPortal() {
     rows.searched = true;
   }
   saveDeliveredSnapshot(rows);
+  reconcileDeliveriesWithPortal.lastRows = rows;
   const updated = applyDeliveredFromPortal(rows, platformNumberFor);
   const groups = deliveryStore.getGroups();
   for (const u of updated) {
@@ -1665,7 +1714,7 @@ client.on("message", async (msg) => {
   // متعرف عليه كمحرر/مدير، بنسجّل تحذير واضح في اللوج فيه صيغة الرقم الفعلية - عشان لو حصلت
   // مشكلة زي دي تاني (خصوصًا مع أرقام بتوصل بصيغة @lid) نلاقي السبب فورًا من غير تخمين
   const CONTROL_COMMAND_PATTERN =
-    /^((?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
+    /^((?:تأكيد\s*|ايقاف\s*|حالة\s*)?استبيان\s*(?:ال)?مستلمين|(?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
   if (CONTROL_COMMAND_PATTERN.test(text)) {
     console.log(`⚠️ رسالة شكلها أمر تحكم ("${text}") من رقم مش متعرف عليه كمحرر/مدير: ${chatId}`);
   }
@@ -2378,6 +2427,85 @@ async function handleControlCommand(msg) {
       const remaining = portalSync.getRemainingQuota();
       await msg.reply(
         `📊 الحصة اليومية لرسائل الدرافت فقط: ${remaining} متبقي من أصل ${portalSync.DAILY_LIMIT} (بيترجع 10 تاني بكرة).\nملحوظة: البطاقات الجاهزة وحالة الطلب من غير حد أقصى - بتتبعت لكل الموجودين كل مرة.`
+      );
+      return;
+    }
+
+    // استبيان الإنتاج الزراعي للمستلمين - بخطوتين (تجهيز ثم تأكيد صريح) عشان الإرسال الجماعي مايحصلش بالغلط
+    // (وعشان حظر واتساب السابق): "استبيان المستلمين" يجهّز القائمة ويعرضها، "تأكيد استبيان المستلمين"
+    // يبدأ الإرسال ويفعّل الإرسال التلقائي لأي مستلم جديد، "ايقاف استبيان المستلمين" يوقف التلقائي.
+    if (/^استبيان\s*(ال)?مستلمين$/i.test(text)) {
+      if (!portalSync.isConfigured()) {
+        await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      if (broadcastInProgress) {
+        await safeReply(msg, "⏳ فيه مهمة تانية شغّالة (إرسال أو مزامنة) - جرّب بعد دقائق.");
+        return;
+      }
+      await safeReply(msg, "⏳ بقرا المزارعين المستلمين من المنصة (بيفتح تفاصيل كل واحد ممكن ياخد عدة دقائق)...");
+      broadcastInProgress = true;
+      let reply;
+      try {
+        const rows = await boundedCall("survey-recipients", () => require("./lib/portalScraper").fetchIssuingByTab("تم التسليم", 1000), 12 * 60 * 1000);
+        const sel = selectSurvey(rows);
+        fs.writeFileSync(SURVEY_CSV, farmerRowsToCsvText(sel.send.map((r) => ({ name: r.name, phone: r.phone })), false), "utf8");
+        surveyRecipients.saveState({ ...surveyRecipients.loadState(), pending: { createdAt: new Date().toISOString(), count: sel.send.length } });
+        reply =
+          `📋 استبيان الإنتاج الزراعي - المستلمون من المنصة: ${rows.length}\n\n` +
+          `✅ جاهز للإرسال: ${sel.send.length}\n` +
+          `↩️ اتبعتلهم قبل كده: ${sel.alreadySent}\n` +
+          `🚫 ممنوع (ما فيه اسم عربي موثوق): ${sel.blocked.length}\n` +
+          `📵 بدون رقم جوال صالح: ${sel.noPhone}\n\n` +
+          (sel.send.length
+            ? `أول 3 أسماء: ${sel.send.slice(0, 3).map((r) => r.name).join("، ")}\n\n` +
+              `الإرسال بيتم تدريجيًا (فاصل 20-45 ثانية بين كل رسالة، وحد 15 بالساعة) عشان حساب واتساب.\n` +
+              `للتأكيد وبدء الإرسال اكتب: تأكيد استبيان المستلمين`
+            : "مفيش حد جاهز للإرسال.");
+      } catch (err) {
+        reply = `⚠️ تعذّر تجهيز قائمة الاستبيان: ${err.message}`;
+      } finally {
+        broadcastInProgress = false;
+      }
+      await safeReply(msg, reply);
+      return;
+    }
+
+    if (/^تأكيد\s*استبيان\s*(ال)?مستلمين$/i.test(text)) {
+      const state = surveyRecipients.loadState();
+      if (!state.pending || !fs.existsSync(SURVEY_CSV)) {
+        await safeReply(msg, "⚠️ مفيش قائمة استبيان مجهّزة. اكتب أولًا: استبيان المستلمين");
+        return;
+      }
+      if (broadcastInProgress) {
+        await safeReply(msg, "⏳ فيه مهمة تانية شغّالة - جرّب بعد دقائق.");
+        return;
+      }
+      surveyRecipients.saveState({ autoEnabled: true, pending: null });
+      // أول دفعة بس (حماية الحساب)؛ الباقي بيكمّل تلقائيًا بعد كل مزامنة (دفعات من 10) لحد ما يخلص
+      const csvLines = fs.readFileSync(SURVEY_CSV, "utf8").split(/\r?\n/).filter(Boolean);
+      fs.writeFileSync(SURVEY_CSV, csvLines.slice(0, 1 + SURVEY_AUTO_BATCH).join("\n") + "\n", "utf8");
+      await safeReply(
+        msg,
+        `✅ تم التأكيد. بدأ إرسال الاستبيان تدريجيًا: أول ${Math.min(SURVEY_AUTO_BATCH, state.pending.count)} دلوقتي، والباقي (إجمالي ${state.pending.count}) بيكمّل تلقائيًا مع كل مزامنة، وكمان أي مزارع يستلم بطاقته بعد كده.\nللإيقاف: ايقاف استبيان المستلمين`
+      );
+      runExclusive("استبيان الإنتاج", async () => {
+        await sendProductionSurveyBroadcast();
+      });
+      return;
+    }
+
+    if (/^ايقاف\s*استبيان\s*(ال)?مستلمين$/i.test(text)) {
+      surveyRecipients.saveState({ ...surveyRecipients.loadState(), autoEnabled: false });
+      await safeReply(msg, "⏹️ تم إيقاف الإرسال التلقائي للاستبيان.");
+      return;
+    }
+
+    if (/^حالة\s*استبيان\s*(ال)?مستلمين$/i.test(text)) {
+      const st = surveyRecipients.loadState();
+      await safeReply(
+        msg,
+        `📊 استبيان المستلمين\n• اتبعت لـ: ${sentTracker.getSentCount("production_survey")} مزارع\n• الإرسال التلقائي: ${st.autoEnabled ? "مفعّل ✅" : "متوقف ⏹️"}\n• قائمة مجهّزة بانتظار التأكيد: ${st.pending ? st.pending.count : "لا"}`
       );
       return;
     }
