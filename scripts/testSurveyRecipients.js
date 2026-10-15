@@ -50,3 +50,13 @@ if (typeof tpl === "string") {
 }
 
 console.log(`\n🎉 كل اختبارات استبيان المستلمين نجحت (${passed} اختبار). صفر واتساب حقيقي.`);
+
+// الإرسال التلقائي مفعّل افتراضيًا (بدون ملف حالة)
+{
+  const fs = require("fs");
+  const { loadState, STATE_FILE } = require("../lib/surveyRecipients");
+  if (!fs.existsSync(STATE_FILE)) {
+    assert(loadState().autoEnabled === true, "autoEnabled default");
+    console.log("✅ 4: الإرسال التلقائي مفعّل افتراضيًا من غير ملف حالة");
+  }
+}

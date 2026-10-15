@@ -791,8 +791,21 @@ async function sendProductionSurveyBroadcast() {
 async function autoSendSurvey(rows) {
   const state = surveyRecipients.loadState();
   if (!state.autoEnabled || !Array.isArray(rows) || rows.length === 0) return;
-  const sel = selectSurvey(rows, SURVEY_AUTO_BATCH);
-  if (sel.blocked.length) console.log(`📝 [استبيان] ${sel.blocked.length} مزارع مستلم بدون اسم عربي موثوق - مش هيتبعتلهم (راجع "حالة استبيان المستلمين").`);
+  let sel = selectSurvey(rows, SURVEY_AUTO_BATCH);
+  // أسماء الجدول العادي إنجليزي - لو فيه مستلمين من غير اسم عربي موثوق، بنقرا الأسماء العربية من تفاصيل
+  // المنصة (بطيء، فمرة كل 12 ساعة بس) وبتتحفظ في سجل المزارعين فيتبعتلهم بعدها
+  if (sel.blocked.length > 0 && Date.now() - (state.lastNameScrapeAt || 0) > 12 * 60 * 60 * 1000) {
+    surveyRecipients.saveState({ ...state, lastNameScrapeAt: Date.now() });
+    try {
+      console.log(`🔎 [استبيان] ${sel.blocked.length} مستلم بدون اسم عربي - بقرا الأسماء العربية من تفاصيل المنصة...`);
+      const detailed = await boundedCall("survey-names", () => require("./lib/portalScraper").fetchIssuingByTab("تم التسليم", 1000), 12 * 60 * 1000);
+      selectSurvey(detailed); // بيحفظ الأسماء العربية في السجل (resolveTrustedArabicName)
+      sel = selectSurvey(rows, SURVEY_AUTO_BATCH);
+    } catch (err) {
+      console.log(`⚠️ [استبيان] تعذّر قراءة الأسماء العربية: ${err.message}`);
+    }
+  }
+  if (sel.blocked.length) console.log(`📝 [استبيان] ${sel.blocked.length} مزارع مستلم بدون اسم عربي موثوق - مش هيتبعتلهم.`);
   if (sel.send.length === 0) return;
   fs.writeFileSync(SURVEY_CSV, farmerRowsToCsvText(sel.send.map((r) => ({ name: r.name, phone: r.phone })), false), "utf8");
   console.log(`📢 [استبيان] بإرسال الاستبيان لـ ${sel.send.length} مزارع استلموا بطاقاتهم حديثًا...`);
@@ -2460,7 +2473,7 @@ async function handleControlCommand(msg) {
           (sel.send.length
             ? `أول 3 أسماء: ${sel.send.slice(0, 3).map((r) => r.name).join("، ")}\n\n` +
               `الإرسال بيتم تدريجيًا (فاصل 20-45 ثانية بين كل رسالة، وحد 15 بالساعة) عشان حساب واتساب.\n` +
-              `للتأكيد وبدء الإرسال اكتب: تأكيد استبيان المستلمين`
+              `الإرسال التلقائي مفعّل ويبدأ مع المزامنة القادمة بدون أي تأكيد. للإيقاف اكتب: ايقاف استبيان المستلمين`
             : "مفيش حد جاهز للإرسال.");
       } catch (err) {
         reply = `⚠️ تعذّر تجهيز قائمة الاستبيان: ${err.message}`;
