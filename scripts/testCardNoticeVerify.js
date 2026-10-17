@@ -45,11 +45,14 @@ check("1ح: حد الإرسال مؤقت", r.problems.find((p) => p.phone === "9
 check("1ط: فشل عادي", code("966507777777") === "FAILED");
 
 const state = {};
+v.trackFirstSeen(r.problems, state, 1000);
 const first = v.selectToNotify(r.problems, state, 1000);
-check("2: أول مرة بيتبلّغ بكل المشاكل الحقيقية (6) من غير المؤقتة", first.length === 6 && !first.some((p) => p.temporary));
+check("2: أول مرة بيتبلّغ بالمشاكل الحقيقية (5) - ومن غير 'لسه ما اتبعتش' (فترة سماح) ولا المؤقتة", first.length === 5 && !first.some((p) => p.temporary || p.code === "NOT_ATTEMPTED"));
 v.markNotified(first, state, 1000);
 check("2ب: نفس المشاكل تاني بعد ساعة -> مفيش تنبيه جديد", v.selectToNotify(r.problems, state, 1000 + 60 * 60 * 1000).length === 0);
-check("2ج: بعد 25 ساعة -> تذكير بكل المشاكل", v.selectToNotify(r.problems, state, 1000 + 25 * 60 * 60 * 1000).length === 6);
+check("2ج: بعد 25 ساعة -> تذكير بالمشاكل الـ5 + 'لسه ما اتبعتش' (عدّت فترة السماح) = 6", v.selectToNotify(r.problems, state, 1000 + 25 * 60 * 60 * 1000).length === 6);
+check("2و: 'لسه ما اتبعتش' بعد ساعتين بس (داخل فترة السماح) -> مش بيتبلّغ", !v.selectToNotify(r.problems, state, 1000 + 2 * 60 * 60 * 1000).some((p) => p.code === "NOT_ATTEMPTED"));
+check("2ز: 'لسه ما اتبعتش' بعد 4 ساعات -> بيتبلّغ", v.selectToNotify(r.problems, state, 1000 + 4 * 60 * 60 * 1000).some((p) => p.code === "NOT_ATTEMPTED"));
 decisions["966505555555"] = { decision: "FAILED", reason: "not_on_whatsapp" };
 const r2 = v.verify(rows, ctx);
 const again = v.selectToNotify(r2.problems, state, 2000);

@@ -513,6 +513,9 @@ client.on("ready", () => {
 
 const REGISTRATION_CSV = path.join(__dirname, "registration_status.csv");
 const CARD_PICKUP_CSV = path.join(__dirname, "card_pickup.csv");
+// أقصى عدد إشعارات استلام بيتبعتوا في المزامنة الواحدة (كل 30 دقيقة) - إشعارات النظام مش خاضعة لحد الحملات،
+// فالسقف ده بيمنع إرسال مئات الرسائل دفعة واحدة (حظر واتساب). الباقي بيكمّل في المزامنات اللي بعدها
+const CARD_PICKUP_BATCH_CAP = 25;
 const DOCUMENTS_REQUEST_CSV = path.join(__dirname, "documents_request.csv");
 const REGISTRATION_INVITATION_CSV = path.join(__dirname, "registration_invitation.csv");
 const DRAFT_FORMS_CSV = path.join(__dirname, "draft_forms.csv");
@@ -621,7 +624,7 @@ async function runPortalSyncOnce() {
 
   if (pastStartDate) {
     // 1) قسم البطاقات الجاهزة (الأولوية الأولى) - بدون حد أقصى
-    const printedResult = await portalSync.syncPrintedCards(Infinity);
+    const printedResult = await portalSync.syncPrintedCards(Infinity, CARD_PICKUP_BATCH_CAP);
     cardKeys = portalSync.buildKeySet(printedResult.rows); // مفاتيح جوال+هوية لكل مزارع في قسم البطاقات
     if (printedResult.count > 0) {
       await sendCardPickupBroadcast();
@@ -732,6 +735,7 @@ async function verifyCardNotices(rows) {
     console.log(`📬 [تحقق الإشعارات] ${result.total} بطاقة جاهزة: وصل الإشعار لـ ${result.sent}، مشاكل: ${real.length}${result.problems.length > real.length ? ` (+${result.problems.length - real.length} مؤقتة بسبب حد الإرسال)` : ""}.`);
 
     const state = cardNoticeVerify.loadIssueState();
+    cardNoticeVerify.trackFirstSeen(result.problems, state);
     const toNotify = cardNoticeVerify.selectToNotify(result.problems, state);
     if (toNotify.length > 0) {
       const recipients = [...new Set([...deliveryStore.getPrepRecipients(), CARD_ISSUE_ALERT_DEFAULT])];
