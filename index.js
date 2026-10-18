@@ -351,6 +351,13 @@ async function gracefulExit(code, reason) {
 client.on("qr", (qr) => {
   console.log("امسح رمز QR ده بواتساب (الأجهزة المرتبطة > ربط جهاز):");
   qrcode.generate(qr, { small: true });
+  // نسخة صفحة HTML بتتحدّث تلقائيًا (QR الطرفية بيتقصّ على الشاشات الصغيرة) - افتحها بأي متصفح على الجهاز
+  try {
+    const file = require("./lib/qrFile").writeQrHtml(qr);
+    console.log(`🖼️ رمز QR كصفحة (أسهل في المسح): افتح الملف ده بالمتصفح: ${file}`);
+  } catch (err) {
+    console.log(`⚠️ تعذّر كتابة صفحة QR: ${err.message}`);
+  }
 });
 
 // لو حصل انقطاع في الاتصال (نت اتقطع، الكهربا رجعت، جلسة واتساب اتلغت...)
