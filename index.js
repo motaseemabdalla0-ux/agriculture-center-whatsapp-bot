@@ -2,7 +2,7 @@ console.log(`🚀 [بدء] السكريبت بدأ التنفيذ - ${new Date()
 
 const fs = require("fs");
 const path = require("path");
-const { Client, LocalAuth, List, MessageMedia } = require("whatsapp-web.js");
+const { Client, LocalAuth, List, MessageMedia, Location } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const cfg = require("./config");
 const { runBroadcast } = require("./lib/broadcastRunner");
@@ -2466,6 +2466,59 @@ async function handleControlCommand(msg) {
       const remaining = portalSync.getRemainingQuota();
       await msg.reply(
         `📊 الحصة اليومية لرسائل الدرافت فقط: ${remaining} متبقي من أصل ${portalSync.DAILY_LIMIT} (بيترجع 10 تاني بكرة).\nملحوظة: البطاقات الجاهزة وحالة الطلب من غير حد أقصى - بتتبعت لكل الموجودين كل مرة.`
+      );
+      return;
+    }
+
+    // تحويل طلبات توصيل مزارعين بعينهم (بياناتهم كاملة + الموقع) لموظف توصيل بعينه في رسالة خاصة:
+    // "حول طلبات التوصيل <جوال الموظف> <جوال مزارع> <جوال مزارع> ..." - مابيغيّرش حالة الطلبات
+    const assignMatch = toWesternDigits(text).match(/^حول\s*طلبات\s*(?:ال)?توصيل\s+([\s\S]+)$/i);
+    if (assignMatch) {
+      // أول رقم = موظف التوصيل، والباقي = المزارعين
+      const allPhones = campaignCheck.extractPhones(assignMatch[1]);
+      const staffPhone = allPhones[0];
+      const farmerPhones = allPhones.slice(1);
+      if (!staffPhone || farmerPhones.length === 0) {
+        await safeReply(msg, "⚠️ الصيغة: حول طلبات التوصيل <جوال الموظف> ثم أرقام المزارعين (رقم في كل سطر).");
+        return;
+      }
+      const found = deliveryStore.findOpenRequestsByPhones(farmerPhones);
+      const toSend = farmerPhones.filter((p) => found[p]);
+      const missing = farmerPhones.filter((p) => !found[p]);
+      const sentIds = [];
+      const failed = [];
+      if (toSend.length) {
+        try {
+          await boundedCall(
+            "assign-header",
+            () => client.sendMessage(`${staffPhone}@c.us`, `🚚 طلبات توصيل محوّلة إليك (${toSend.length})\nبعد كل تسليم: خذ التوقيع الإلكتروني من المزارع في المنصة، والحالة بتتحدّث تلقائيًا.`),
+            20000
+          );
+          for (const p of toSend) {
+            const req = found[p];
+            try {
+              const body = deliveryFlow.formatGroupMessage(req).split("\n\nبعد التسليم")[0];
+              await boundedCall("assign-body", () => client.sendMessage(`${staffPhone}@c.us`, body), 20000);
+              if (typeof req.latitude === "number" && typeof req.longitude === "number") {
+                await boundedCall("assign-location", () => client.sendMessage(`${staffPhone}@c.us`, new Location(req.latitude, req.longitude)), 20000);
+              }
+              deliveryStore.markAssigned(req.id, staffPhone);
+              sentIds.push(req.id);
+              await new Promise((r) => setTimeout(r, 2500));
+            } catch (err) {
+              failed.push(`${req.id} (${err.message})`);
+            }
+          }
+        } catch (err) {
+          failed.push(`فشل الإرسال للموظف: ${err.message}`);
+        }
+      }
+      await safeReply(
+        msg,
+        `🚚 تحويل طلبات التوصيل للموظف ${staffPhone}\n\n` +
+          `✅ اتحوّل: ${sentIds.length ? sentIds.join("، ") : "لا يوجد"}\n` +
+          (missing.length ? `⚪ ما لقيت طلب توصيل مفتوح لـ: ${missing.join("، ")}\n` : "") +
+          (failed.length ? `❌ فشل: ${failed.join("، ")}` : "")
       );
       return;
     }

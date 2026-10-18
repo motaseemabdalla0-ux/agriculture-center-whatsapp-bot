@@ -63,6 +63,15 @@ function run() {
   check("4ب3: منفصلين عن مستقبلي تقرير التوصيل", store.getPrepRecipients().includes("966508888888") && !store.getReportRecipients().includes("966508888888"));
   check("4ب4: remove بيشيل", store.removePrepRecipient("966508888888") === true && store.getPrepRecipients().length === 0);
 
+  console.log("\n=== 4ج) تحويل طلبات لموظف توصيل بعينه ===");
+  const open1 = store.createRequest({ phone: "966507081261", name: "فلان", regionKey: "SOUTH", district: null, autoDetected: false, preferredDateTime: "الأحد", latitude: 26.6, longitude: 37.9 });
+  const doneReq = store.createRequest({ phone: "966551360340", name: "مسلَّم", regionKey: "NORTH", district: null, autoDetected: false, preferredDateTime: "الأحد" });
+  store.markDelivered(doneReq.id);
+  const foundReqs = store.findOpenRequestsByPhones(["966507081261", "966551360340", "966500000000"]);
+  check("4ج: بيلاقي الطلب المفتوح بالجوال", foundReqs["966507081261"] && foundReqs["966507081261"].id === open1.id);
+  check("4ج2: المسلَّم وغير الموجود = null", foundReqs["966551360340"] === null && foundReqs["966500000000"] === null);
+  check("4ج3: markAssigned بيسجّل الموظف من غير ما يغيّر الحالة", store.markAssigned(open1.id, "966569617231") && store.findRequest(open1.id).assignedTo === "966569617231" && store.findRequest(open1.id).status === "NEW");
+
   console.log("\n=== 5) صفر واتساب حقيقي ===");
   const reportSrc = fs.readFileSync(path.join(ROOT, "lib", "deliveryReport.js"), "utf8");
   check("5: lib/deliveryReport.js مفيهوش أي استدعاء sendMessage - بناء وتنسيق نص بس", !/sendMessage/.test(reportSrc));
