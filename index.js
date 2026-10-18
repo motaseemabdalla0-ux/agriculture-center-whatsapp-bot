@@ -349,6 +349,7 @@ async function gracefulExit(code, reason) {
 }
 
 client.on("qr", (qr) => {
+  if (typeof extendReadyTimeout === "function") extendReadyTimeout();
   console.log("امسح رمز QR ده بواتساب (الأجهزة المرتبطة > ربط جهاز):");
   qrcode.generate(qr, { small: true });
   // نسخة صفحة HTML بتتحدّث تلقائيًا (QR الطرفية بيتقصّ على الشاشات الصغيرة) - افتحها بأي متصفح على الجهاز
@@ -380,13 +381,24 @@ client.on("auth_failure", (msg) => {
 // (زي مشكلة تشغيل Chrome) - نقفل العملية بنفسنا عشان PM2 يرجّعها من الصفر، بدل ما تفضل
 // واقفة للأبد من غير أي رد أو أثر (وده بالظبط اللي كان بيحصل قبل الإصلاح ده)
 const READY_TIMEOUT_MS = 240000;
-const readyTimeout = setTimeout(() => {
+const READY_TIMEOUT_WITH_QR_MS = 10 * 60 * 1000; // وقت مسح الـQR (بدل 4 دقايق) - عشان البوت ما يعيد التشغيل ويغيّر الرمز وانت بتمسحه
+let readyTimeout = setTimeout(() => {
   console.log(
     `🚨 [مهلة الاتصال] البوت ما اتصلش بواتساب خلال ${READY_TIMEOUT_MS / 1000} ثانية من بدء التشغيل - ` +
       `غالبًا مشكلة في تشغيل Chrome (عمليات عالقة/قلة رام/ملف قفل). هيتقفل عشان PM2 يرجّعه من جديد.`
   );
   gracefulExit(1, "التشغيل علّق");
 }, READY_TIMEOUT_MS);
+let readyTimeoutExtended = false;
+function extendReadyTimeout() {
+  if (readyTimeoutExtended) return;
+  readyTimeoutExtended = true;
+  clearTimeout(readyTimeout);
+  readyTimeout = setTimeout(() => {
+    console.log(`🚨 [مهلة الاتصال] ما اتربطش واتساب خلال ${READY_TIMEOUT_WITH_QR_MS / 60000} دقايق من ظهور الـQR - هيتقفل ويتشغّل من جديد.`);
+    gracefulExit(1, "ما اتربطش");
+  }, READY_TIMEOUT_WITH_QR_MS);
+}
 client.on("ready", () => clearTimeout(readyTimeout));
 
 // Chrome ممكن يعلّق وهو شغّال (خصوصًا مع الرام العالية على الجهاز ده) والبوت يفضل "online" في
@@ -883,7 +895,10 @@ let gitUpdateFailureNotifiedFor = null; // آخر remoteHash اتبعت عنه �
 // كل اختبارات طبقة الأمان) قبل ما يعيد تشغيل نفسه بيه - تمامًا زي "تحديث الكود" (مجلد درايف)
 // بس المصدر هنا GitHub مباشرة بدل ملف بيتحط يدويًا. لو الفحص فشل، الكود بيرجع لآخر نسخة سليمة
 // تلقائيًا ومفيش أي إعادة تشغيل - البوت فاضل شغّال بالكود القديم الآمن من غير أي انقطاع
+let gitWatcherStarted = false;
 function startGitAutoUpdateWatcher() {
+  if (gitWatcherStarted) return;
+  gitWatcherStarted = true;
   setInterval(async () => {
     if (broadcastInProgress) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
     try {
@@ -3574,6 +3589,9 @@ client.on("message_create", async (msg) => {
   msg.isSelfChatCommand = true;
   await handleControlCommand(msg);
 });
+
+// التحديث التلقائي من GitHub من أول التشغيل: لو البوت منفصل عن واتساب (محتاج ربط/QR) برضه يسحب أي إصلاح جديد
+startGitAutoUpdateWatcher();
 
 console.log("🔌 [بدء] جاري نداء client.initialize() (فتح Chrome والاتصال بواتساب ويب)...");
 client.initialize().catch((err) => {
