@@ -60,3 +60,16 @@ console.log(`\n🎉 كل اختبارات استبيان المستلمين نج
     console.log("✅ 4: الإرسال التلقائي مفعّل افتراضيًا من غير ملف حالة");
   }
 }
+
+// الاستبيان بس للي سبق ردّوا على البوت
+{
+  const rowsR = [
+    { name: "أحمد", phone: "966501111111" }, // رد
+    { name: "خالد", phone: "966502222222" }, // ما ردّش
+    { name: "سعد", phone: "966503333333" }, // رد
+  ];
+  const ctxR = { hasBeenSent: () => false, hasReplied: (p) => p !== "966502222222", resolveName: (p, c) => c };
+  const rr = selectSurveyRecipients(rowsR, ctxR);
+  assert(rr.send.length === 2 && rr.notReplied === 1 && !rr.send.some((x) => x.phone === "966502222222"), "replied only");
+  console.log("✅ 5: الاستبيان بيتبعت بس للي ردّوا، واللي ما ردّوش بيتحسبوا ومستبعدين");
+}

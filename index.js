@@ -534,7 +534,7 @@ const REGISTRATION_CSV = path.join(__dirname, "registration_status.csv");
 const CARD_PICKUP_CSV = path.join(__dirname, "card_pickup.csv");
 // أقصى عدد إشعارات استلام بيتبعتوا في المزامنة الواحدة (كل 30 دقيقة) - إشعارات النظام مش خاضعة لحد الحملات،
 // فالسقف ده بيمنع إرسال مئات الرسائل دفعة واحدة (حظر واتساب). الباقي بيكمّل في المزامنات اللي بعدها
-const CARD_PICKUP_BATCH_CAP = 25;
+const CARD_PICKUP_BATCH_CAP = 5;
 const DOCUMENTS_REQUEST_CSV = path.join(__dirname, "documents_request.csv");
 const REGISTRATION_INVITATION_CSV = path.join(__dirname, "registration_invitation.csv");
 const DRAFT_FORMS_CSV = path.join(__dirname, "draft_forms.csv");
@@ -781,7 +781,7 @@ async function verifyCardNotices(rows) {
 // المصدر: تاب "Delivered" في المنصة. الاسم لازم عربي موثوق (طلب توصيل سابق بالجوال، أو سجل المزارعين،
 // أو الاسم العربي من تفاصيل المنصة) - غير كده الرسالة بتتمنع (BLOCKED_NON_ARABIC_NAME) زي باقي الحملات.
 const SURVEY_CSV = path.join(__dirname, "production_survey.csv");
-const SURVEY_AUTO_BATCH = 10; // أقصى عدد بيتبعتلهم تلقائيًا في كل مزامنة (حماية من حظر واتساب)
+const SURVEY_AUTO_BATCH = 3; // أقصى عدد بيتبعتلهم تلقائيًا في كل مزامنة (حماية من حظر واتساب)
 
 function resolveSurveyName(phone, candidate) {
   const req = deliveryStore.getAllRequests().find((r) => r.phone === phone && r.name && isArabicName(r.name));
@@ -790,9 +790,14 @@ function resolveSurveyName(phone, candidate) {
 }
 
 function selectSurvey(rows, limit = Infinity) {
+  const repliers = deliveryStore.getKnownReplierPhones();
   return surveyRecipients.selectSurveyRecipients(
     rows,
-    { hasBeenSent: (phone) => sentTracker.hasBeenSent("production_survey", phone), resolveName: resolveSurveyName },
+    {
+      hasBeenSent: (phone) => sentTracker.hasBeenSent("production_survey", phone),
+      hasReplied: (phone) => repliers.has(phone) || farmerRegistry.getEntry(phone).communicationStatus === "FARMER_REPLIED",
+      resolveName: resolveSurveyName,
+    },
     limit
   );
 }
@@ -2547,6 +2552,7 @@ async function handleControlCommand(msg) {
           `📋 استبيان الإنتاج الزراعي - المستلمون من المنصة: ${rows.length}\n\n` +
           `✅ جاهز للإرسال: ${sel.send.length}\n` +
           `↩️ اتبعتلهم قبل كده: ${sel.alreadySent}\n` +
+          `💬 لم يردّوا على البوت أبدًا (مستبعدون - الاستبيان للي تواصلوا معنا بس): ${sel.notReplied}\n` +
           `🚫 ممنوع (ما فيه اسم عربي موثوق): ${sel.blocked.length}\n` +
           `📵 بدون رقم جوال صالح: ${sel.noPhone}\n\n` +
           (sel.send.length
