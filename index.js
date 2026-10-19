@@ -2699,6 +2699,25 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // "نسخة البوت": بيقول أي commit شغّال فعلًا على الجهاز ووقته ومدة التشغيل - عشان نتأكد إن التحديث التلقائي وصل
+    if (/^(?:نسخة|نسخه|اصدار|إصدار)\s*(?:ال)?بوت$/i.test(text) || /^bot\s*version$/i.test(text)) {
+      const { execFileSync } = require("child_process");
+      const git = (args) => {
+        try {
+          return execFileSync("git", args, { cwd: __dirname, encoding: "utf8", timeout: 10000 }).trim();
+        } catch {
+          return "غير متاح";
+        }
+      };
+      const up = Math.round(process.uptime() / 60);
+      await safeReply(
+        msg,
+        `🤖 نسخة البوت الشغّالة\nالـcommit: ${git(["rev-parse", "--short", "HEAD"])}\nالرسالة: ${git(["log", "-1", "--format=%s"])}\nتاريخ الـcommit: ${git(["log", "-1", "--format=%ci"])}\nالفرع: ${git(["rev-parse", "--abbrev-ref", "HEAD"])}\nمدة التشغيل منذ آخر إعادة تشغيل: ${up} دقيقة\n` +
+          `تقرير طلبات المزارعين: ${require("fs").existsSync(require("path").join(__dirname, "lib", "farmerRequests.js")) ? "موجود ✅" : "غير موجود ❌"}`
+      );
+      return;
+    }
+
     // تقرير "حالة طلبات خدمات المزارعين" (صفحتين PDF + صور): بيتقرا من بوابة مدير علاقات المزارعين على المنصة
     // قبل كل إرسال، وبيتفحص (عدّادات المنصة = المقروء) وإلا ما بيتبعتش
     if (/^(?:(?:تقرير\s*)?(?:حالة\s*)?طلبات\s*(?:خدمات\s*)?(?:ال)?مزارعين|farmer\s*requests)$/i.test(text)) {
