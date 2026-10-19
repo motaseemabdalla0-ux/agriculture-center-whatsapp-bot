@@ -760,7 +760,7 @@ const CARD_ISSUE_ALERT_DEFAULT = "966535571579";
 async function verifyCardNotices(rows) {
   try {
     const decisions = new Map();
-    require("./lib/auditLog").readAll().forEach((e) => {
+    require("./lib/auditLog").readRecent().forEach((e) => {
       if (e.campaignType === "card_pickup" && e.normalizedPhone) decisions.set(e.normalizedPhone, e);
     });
     const result = cardNoticeVerify.verify(rows, {
