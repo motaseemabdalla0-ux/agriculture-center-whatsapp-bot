@@ -49,3 +49,18 @@ console.log(`\n🎉 كل اختبارات شريحة بطاقة المزارع �
   assertL(base.pendingReview === 57, "original stats untouched");
   console.log("✅ 4: إضافات الكشف: تحليل النص (حتى بالأرقام العربية) + جمعها على المنصة = 288 / 67 / إجمالي 858");
 }
+
+// فحص صحة أرقام المنصة قبل رسم الشريحة
+{
+  const assertV = require("assert");
+  const good = { pendingReview: 57, transferredToLts: 41, onHold: 52, approved: 2, pendingPrinting: 54, issuingPending: 54, pendingDelivery: 299, delivered: 204, totalInQueue: 557 };
+  const v1 = s.validateStats(good);
+  assertV(v1.ok && v1.warnings.length === 0, "good stats pass");
+  const v2 = s.validateStats({ ...good, transferredToLts: null });
+  assertV(!v2.ok && v2.errors[0].includes("محوّل إلى LTS"), "missing stat is an error");
+  const v3 = s.validateStats({ ...good, issuingPending: 55 });
+  assertV(v3.ok && v3.warnings.length >= 1, "mismatch between pages is a warning");
+  const v4 = s.validateStats({ ...good, totalInQueue: 500 });
+  assertV(v4.ok && v4.warnings.some((w) => w.includes("Total in Queue")), "queue total mismatch warns");
+  console.log("✅ 5: فحص الأرقام: ناقص = خطأ (بيمنع الشريحة)، تعارض صفحتين/مجموع الطابور = تحذير");
+}

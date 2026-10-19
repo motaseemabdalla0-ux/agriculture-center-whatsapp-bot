@@ -716,6 +716,23 @@ async function maybeSyncPortal() {
   });
 }
 
+// عند طلب أي تقرير توصيل/تجهيز: نحدّث الحالات من المنصة أول (تاب Delivered) قبل الإعداد، فالأرقام تطلع
+// محدّثة. لو فيه مهمة تانية شغّالة أو فشل التحديث، بنكمّل بآخر تحديث ونوضّح ده في سطر مستقل.
+async function refreshDeliveriesOnDemand(msg) {
+  if (!portalSync.isConfigured()) return { refreshed: false, note: "⚠️ المنصة غير مضبوطة - الأرقام من بيانات البوت." };
+  if (broadcastInProgress) return { refreshed: false, note: "⚠️ فيه مهمة تانية شغّالة (إرسال/مزامنة) فما قدرت أحدّث من المنصة الآن - الأرقام من آخر تحديث." };
+  await safeReply(msg, "⏳ بحدّث البيانات من المنصة قبل إعداد التقرير (حتى دقيقتين)...");
+  broadcastInProgress = true;
+  try {
+    const t = await boundedCall("report-refresh", () => reconcileDeliveriesWithPortal(), 6 * 60 * 1000);
+    return { refreshed: true, note: `🔄 تم التحديث من المنصة: ${t}` };
+  } catch (err) {
+    return { refreshed: false, note: `⚠️ تعذّر التحديث من المنصة (${err.message}) - الأرقام من آخر تحديث.` };
+  } finally {
+    broadcastInProgress = false;
+  }
+}
+
 // قبل أي تقرير يومي (توصيل/تجهيز) بنحدّث تسليم الطلبات من المنصة عشان التقرير يعكس آخر وضع فعلي.
 // لو فيه فحص حصل في آخر 10 دقائق، أو مهمة تانية شغّالة، أو المنصة مش متظبّطة - بنكمّل بالبيانات الحالية
 async function refreshDeliveriesBeforeReport() {
@@ -2613,7 +2630,7 @@ async function handleControlCommand(msg) {
     // إضافات الكشف (قبل ما يترفع على المنصة): "كشف بطاقة المزارع قيد المراجعة 136 انتظار الطباعة 13" / "مسح كشف بطاقة المزارع"
     if (/^مسح\s*كشف\s*(?:بطاقة\s*المزارع|farmer\s*card)$/i.test(text)) {
       require("./lib/farmerCardAdjust").clear();
-      await safeReply(msg, "✅ تم مسح إضافات الكشف. تقرير farmer card بيعرض أرقام المنصة فقط.");
+      await safeReply(msg, "✅ تم مسح إضافات الكشف. تقرير بطاقة المزارع بيعرض أرقام المنصة فقط.");
       return;
     }
     const sheetSetMatch = text.match(/^كشف\s*(?:بطاقة\s*المزارع|farmer\s*card)\s+([\s\S]+)$/i);
@@ -2626,10 +2643,10 @@ async function handleControlCommand(msg) {
       }
       adjLib.save(parsed);
       await safeReply(msg, `✅ اتحفظت إضافات الكشف: قيد المراجعة +${parsed.review}، انتظار الطباعة +${parsed.waitingPrint}.
-لتقرير بها اكتب: farmer card كشف  |  لأرقام المنصة فقط: farmer card  |  للمسح: مسح كشف بطاقة المزارع`);
+للتقرير بالإضافات اكتب: تقرير بطاقة المزارع مع الكشف  |  لأرقام المنصة فقط: تقرير بطاقة المزارع  |  للمسح: مسح كشف بطاقة المزارع`);
       return;
     }
-    const fcMatch = text.match(/^(?:(?:حاله|حالة)?\s*بطاقة\s*المزارع|farmer\s*card|لوحة\s*(?:ال)?بطاقات)(\s+(?:مع\s*)?(?:ال)?كشف)?$/i);
+    const fcMatch = text.match(/^(?:(?:تقرير\s*)?(?:حاله|حالة)?\s*بطاقة\s*المزارع|farmer\s*card|لوحة\s*(?:ال)?بطاقات)(\s+(?:مع\s*)?(?:ال)?كشف)?$/i);
     if (fcMatch) {
       const withSheet = !!fcMatch[1];
       if (!portalSync.isConfigured()) {
@@ -2648,6 +2665,11 @@ async function handleControlCommand(msg) {
         const slide = require("./lib/farmerCardSlide");
         let stats = await boundedCall("farmer-card-stats", () => require("./lib/portalScraper").fetchPortalStats(), 4 * 60 * 1000);
         const adjLib = require("./lib/farmerCardAdjust");
+        const check = slide.validateStats(stats);
+        if (!check.ok) {
+          await safeReply(msg, `⛔ ما أرسلت التقرير لأن قراءة المنصة ناقصة (حتى لا تظهر أرقام غلط):\n• ${check.errors.join("\n• ")}\nحاول بعد قليل، أو راجع المنصة.`);
+          return;
+        }
         const platformStats = stats;
         if (withSheet) stats = adjLib.applyAdjustments(stats, adjLib.load());
         const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Riyadh" });
@@ -2656,11 +2678,13 @@ async function handleControlCommand(msg) {
         files = await boundedCall("farmer-card-render", () => slide.renderSlideFiles(data), 2 * 60 * 1000);
         if (!withSheet) slide.saveSnapshot(slide.computeCounts(platformStats), dateStr); // اللقطة الأسبوعية بأرقام المنصة الصافية بس
         summaryText =
-          `📊 farmer card - ${dateStr}${withSheet ? " (مع الكشف)" : ""}\n\n` +
+          `📊 تقرير بطاقة المزارع - ${dateStr}${withSheet ? " (مع الكشف)" : ""}\n\n` +
           `الإجمالي: ${data.total}\n` +
           `• قيد المراجعة (بدون المؤرشف والمرفوض): ${data.review}\n` +
           `• في انتظار الطباعة: ${data.waitingPrint}\n` +
-          `• تمت طباعتها: ${data.printed} (تم تسليمها ${data.delivered}، بانتظار التسليم ${data.pendingDelivery})`;
+          `• تمت طباعتها: ${data.printed} (تم تسليمها ${data.delivered}، بانتظار التسليم ${data.pendingDelivery})\n\n` +
+          (check.warnings.length ? `⚠️ تنبيه على الأرقام:\n• ${check.warnings.join("\n• ")}` : "✅ تم التحقق: الأرقام مقروءة كاملة من المنصة ومتطابقة بين صفحتي المراجعة والإصدار.") +
+          (withSheet ? "\n📎 تتضمّن إضافات الكشف اليدوية." : "");
         const chatId = msg.from;
         const toMedia = (buf, mime, name) => new MessageMedia(mime, buf.toString("base64"), name);
         await safeReply(msg, summaryText);
@@ -3155,6 +3179,8 @@ async function handleControlCommand(msg) {
     }
     if (/^تجهيز\s*(ال)?بطاقات$/i.test(text)) {
       try {
+        const rf = await refreshDeliveriesOnDemand(msg);
+        if (rf.note) await safeReply(msg, rf.note);
         const data = buildFullReport();
         await safeReply(msg, formatPrepList(data));
         if (data.rows.some((r) => r.status === "NEW")) await sendDeliveryReportFile(msg.from, data, "prep");
@@ -3174,6 +3200,8 @@ async function handleControlCommand(msg) {
     // اللي طلبته، مش لقائمة المستقبلين المسجّلين (عشان تقدر تعاين الشكل بسرعة)
     if (/^تقرير\s*التوصيل$/i.test(text) || /^تفاصيل\s*(ال)?مستفيدين$/i.test(text)) {
       try {
+        const rf = await refreshDeliveriesOnDemand(msg);
+        if (rf.note) await safeReply(msg, rf.note);
         const data = buildFullReport();
         const detailsOnly = /^تفاصيل/i.test(text);
         if (!detailsOnly || data.total === 0) await safeReply(msg, formatFullReportMessage(data));
