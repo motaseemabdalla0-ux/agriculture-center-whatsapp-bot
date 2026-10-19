@@ -2640,8 +2640,8 @@ async function handleControlCommand(msg) {
         const chatId = msg.from;
         const toMedia = (buf, mime, name) => new MessageMedia(mime, buf.toString("base64"), name);
         await safeReply(msg, summaryText);
-        await boundedCall("farmer-card-send-png", () => client.sendMessage(chatId, toMedia(files.png, "image/png", `بطاقة المزارع - ${dateStr}.png`)), 60000);
-        await boundedCall("farmer-card-send-pdf", () => client.sendMessage(chatId, toMedia(files.pdf, "application/pdf", `بطاقة المزارع - ${dateStr}.pdf`), { sendMediaAsDocument: true }), 60000);
+        await boundedCall("farmer-card-send-png", () => client.sendMessage(chatId, toMedia(files.png, "image/png", `farmer card - ${dateStr}.png`)), 60000);
+        await boundedCall("farmer-card-send-pdf", () => client.sendMessage(chatId, toMedia(files.pdf, "application/pdf", `farmer card - ${dateStr}.pdf`), { sendMediaAsDocument: true }), 60000);
       } catch (err) {
         console.log(`⚠️ [بطاقة المزارع] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّر تجهيز الشريحة: ${err.message}`);
