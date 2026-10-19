@@ -1758,7 +1758,7 @@ client.on("message", async (msg) => {
   // متعرف عليه كمحرر/مدير، بنسجّل تحذير واضح في اللوج فيه صيغة الرقم الفعلية - عشان لو حصلت
   // مشكلة زي دي تاني (خصوصًا مع أرقام بتوصل بصيغة @lid) نلاقي السبب فورًا من غير تخمين
   const CONTROL_COMMAND_PATTERN =
-    /^((?:تأكيد\s*|ايقاف\s*|حالة\s*)?استبيان\s*(?:ال)?مستلمين|(?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
+    /^((?:تأكيد\s*|ايقاف\s*|حالة\s*)?استبيان\s*(?:ال)?مستلمين|farmer\s*card|(?:مسح\s*)?كشف\s*بطاقة\s*المزارع|(?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
   if (CONTROL_COMMAND_PATTERN.test(text)) {
     console.log(`⚠️ رسالة شكلها أمر تحكم ("${text}") من رقم مش متعرف عليه كمحرر/مدير: ${chatId}`);
   }
@@ -2610,7 +2610,28 @@ async function handleControlCommand(msg) {
 
     // شريحة "بطاقة المزارع" الأسبوعية بأرقام المنصة الحية: بتقرا الإحصائيات وبترسم الشريحة (PNG + PDF).
     // قيد المراجعة = كل حالات المراجعة (قيد المراجعة + معلّق + مقبول) ما عدا المؤرشف والمرفوض
-    if (/^(حاله|حالة)?\s*بطاقة\s*المزارع$|^لوحة\s*(ال)?بطاقات$/i.test(text)) {
+    // إضافات الكشف (قبل ما يترفع على المنصة): "كشف بطاقة المزارع قيد المراجعة 136 انتظار الطباعة 13" / "مسح كشف بطاقة المزارع"
+    if (/^مسح\s*كشف\s*(?:بطاقة\s*المزارع|farmer\s*card)$/i.test(text)) {
+      require("./lib/farmerCardAdjust").clear();
+      await safeReply(msg, "✅ تم مسح إضافات الكشف. تقرير farmer card بيعرض أرقام المنصة فقط.");
+      return;
+    }
+    const sheetSetMatch = text.match(/^كشف\s*(?:بطاقة\s*المزارع|farmer\s*card)\s+([\s\S]+)$/i);
+    if (sheetSetMatch) {
+      const adjLib = require("./lib/farmerCardAdjust");
+      const parsed = adjLib.parseAdjustmentText(sheetSetMatch[1]);
+      if (!parsed) {
+        await safeReply(msg, "⚠️ الصيغة: كشف بطاقة المزارع قيد المراجعة 136 انتظار الطباعة 13");
+        return;
+      }
+      adjLib.save(parsed);
+      await safeReply(msg, `✅ اتحفظت إضافات الكشف: قيد المراجعة +${parsed.review}، انتظار الطباعة +${parsed.waitingPrint}.
+لتقرير بها اكتب: farmer card كشف  |  لأرقام المنصة فقط: farmer card  |  للمسح: مسح كشف بطاقة المزارع`);
+      return;
+    }
+    const fcMatch = text.match(/^(?:(?:حاله|حالة)?\s*بطاقة\s*المزارع|farmer\s*card|لوحة\s*(?:ال)?بطاقات)(\s+(?:مع\s*)?(?:ال)?كشف)?$/i);
+    if (fcMatch) {
+      const withSheet = !!fcMatch[1];
       if (!portalSync.isConfigured()) {
         await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
@@ -2625,23 +2646,26 @@ async function handleControlCommand(msg) {
       let files = null;
       try {
         const slide = require("./lib/farmerCardSlide");
-        const stats = await boundedCall("farmer-card-stats", () => require("./lib/portalScraper").fetchPortalStats(), 4 * 60 * 1000);
+        let stats = await boundedCall("farmer-card-stats", () => require("./lib/portalScraper").fetchPortalStats(), 4 * 60 * 1000);
+        const adjLib = require("./lib/farmerCardAdjust");
+        const platformStats = stats;
+        if (withSheet) stats = adjLib.applyAdjustments(stats, adjLib.load());
         const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Riyadh" });
         const previous = slide.pickPrevious(slide.loadSnapshots(), dateStr);
         const data = slide.computeSlideData(stats, { dateStr, previous });
         files = await boundedCall("farmer-card-render", () => slide.renderSlideFiles(data), 2 * 60 * 1000);
-        slide.saveSnapshot(slide.computeCounts(stats), dateStr);
+        if (!withSheet) slide.saveSnapshot(slide.computeCounts(platformStats), dateStr); // اللقطة الأسبوعية بأرقام المنصة الصافية بس
         summaryText =
-          `📊 بطاقة المزارع - ${dateStr}\n\n` +
+          `📊 farmer card - ${dateStr}${withSheet ? " (مع الكشف)" : ""}\n\n` +
           `الإجمالي: ${data.total}\n` +
-          `• قيد المراجعة (مراجعة + معلّق + مقبول، بدون المؤرشف والمرفوض): ${data.review}\n` +
+          `• قيد المراجعة (بدون المؤرشف والمرفوض): ${data.review}\n` +
           `• في انتظار الطباعة: ${data.waitingPrint}\n` +
           `• تمت طباعتها: ${data.printed} (تم تسليمها ${data.delivered}، بانتظار التسليم ${data.pendingDelivery})`;
         const chatId = msg.from;
         const toMedia = (buf, mime, name) => new MessageMedia(mime, buf.toString("base64"), name);
         await safeReply(msg, summaryText);
-        await boundedCall("farmer-card-send-png", () => client.sendMessage(chatId, toMedia(files.png, "image/png", `farmer card - ${dateStr}.png`)), 60000);
-        await boundedCall("farmer-card-send-pdf", () => client.sendMessage(chatId, toMedia(files.pdf, "application/pdf", `farmer card - ${dateStr}.pdf`), { sendMediaAsDocument: true }), 60000);
+        await boundedCall("farmer-card-send-png", () => client.sendMessage(chatId, toMedia(files.png, "image/png", `farmer card${withSheet ? " (with sheet)" : ""} - ${dateStr}.png`)), 60000);
+        await boundedCall("farmer-card-send-pdf", () => client.sendMessage(chatId, toMedia(files.pdf, "application/pdf", `farmer card${withSheet ? " (with sheet)" : ""} - ${dateStr}.pdf`), { sendMediaAsDocument: true }), 60000);
       } catch (err) {
         console.log(`⚠️ [بطاقة المزارع] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّر تجهيز الشريحة: ${err.message}`);

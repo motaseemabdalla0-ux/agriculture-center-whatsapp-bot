@@ -32,3 +32,20 @@ check("3ج: الـHTML فيه الأرقام بالعربي-الهندي (٥٨٥
 check("3د: الـHTML فيه عنوان الشريحة وأقسامها", html.includes("بطاقة المزارع") && html.includes("تفصيل البطاقات المطبوعة") && html.includes("التحديث الأسبوعي"));
 
 console.log(`\n🎉 كل اختبارات شريحة بطاقة المزارع نجحت (${passed} اختبار). صفر متصفح وصفر منصة.`);
+
+// إضافات الكشف (farmer card مع الكشف)
+{
+  const adj = require("../lib/farmerCardAdjust");
+  const assertL = require("assert");
+  const p1 = adj.parseAdjustmentText("قيد المراجعة 136 انتظار الطباعة 13");
+  assertL(p1 && p1.review === 136 && p1.waitingPrint === 13, "parse both");
+  const p2 = adj.parseAdjustmentText("تحت الطباعة 13 و قيد المراجعة ١٣٦");
+  assertL(p2 && p2.review === 136 && p2.waitingPrint === 13, "parse arabic digits and alt wording");
+  assertL(adj.parseAdjustmentText("كلام عادي") === null, "no numbers -> null");
+  const base = { pendingReview: 57, transferredToLts: 41, onHold: 52, approved: 2, pendingPrinting: 54, pendingDelivery: 299, delivered: 204 };
+  const merged = adj.applyAdjustments(base, { review: 136, waitingPrint: 13 });
+  const c = s.computeCounts(merged);
+  assertL(c.review === 288 && c.waitingPrint === 67 && c.total === 858, "applied totals 288/67/858");
+  assertL(base.pendingReview === 57, "original stats untouched");
+  console.log("✅ 4: إضافات الكشف: تحليل النص (حتى بالأرقام العربية) + جمعها على المنصة = 288 / 67 / إجمالي 858");
+}
