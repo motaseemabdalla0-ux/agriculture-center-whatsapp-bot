@@ -64,3 +64,12 @@ console.log(`\n🎉 كل اختبارات شريحة بطاقة المزارع �
   assertV(v4.ok && v4.warnings.some((w) => w.includes("Total in Queue")), "queue total mismatch warns");
   console.log("✅ 5: فحص الأرقام: ناقص = خطأ (بيمنع الشريحة)، تعارض صفحتين/مجموع الطابور = تحذير");
 }
+
+// كرت مخفي في المنصة (عدده صفر) = 0 مع تنبيه، مش خطأ يمنع التقرير
+{
+  const assertZ = require("assert");
+  const z = { pendingReview: 40, transferredToLts: 32, onHold: 53, approved: 0, pendingPrinting: 92, issuingPending: 92, pendingDelivery: 299, delivered: 204, totalInQueue: 595, assumedZero: ["approved"] };
+  const vz = s.validateStats(z);
+  assertZ(vz.ok && vz.warnings.some((w) => w.includes("مقبول")), "assumed-zero approved is a warning, not an error");
+  console.log("✅ 6: كرت 'مقبول' غير الظاهر (صفر) بيعدّي بتنبيه ومش بيمنع التقرير");
+}
