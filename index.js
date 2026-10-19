@@ -1775,7 +1775,7 @@ client.on("message", async (msg) => {
   // متعرف عليه كمحرر/مدير، بنسجّل تحذير واضح في اللوج فيه صيغة الرقم الفعلية - عشان لو حصلت
   // مشكلة زي دي تاني (خصوصًا مع أرقام بتوصل بصيغة @lid) نلاقي السبب فورًا من غير تخمين
   const CONTROL_COMMAND_PATTERN =
-    /^((?:تأكيد\s*|ايقاف\s*|حالة\s*)?استبيان\s*(?:ال)?مستلمين|farmer\s*card|(?:مسح\s*)?كشف\s*بطاقة\s*المزارع|(?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
+    /^((?:تأكيد\s*|ايقاف\s*|حالة\s*)?استبيان\s*(?:ال)?مستلمين|farmer\s*card|farmer\s*requests|(?:تقرير\s*)?(?:حالة\s*)?طلبات\s*(?:خدمات\s*)?المزارعين|(?:مسح\s*)?كشف\s*بطاقة\s*المزارع|(?:حاله|حالة)?\s*بطاقة\s*المزارع|تحقق\s*(?:من\s*)?[اإأ]رسال|تحقق\s*(?:ال)?بطاقات|فحص\s*تسليم|تجهيز\s*(?:ال)?بطاقات|تفاصيل\s*(?:ال)?مستفيدين|استبعد\s*طلب|احصائيات|إحصائيات|مزامنة النظام|تقرير|الحصة|مدراء|محررين|اجمالي\s*الارسال|إجمالي\s*الإرسال|ارسالات|إرسالات|تقرير\s*الارسال|تقرير\s*الإرسال|اضف\s*مدير|احذف\s*مدير|اضف\s*محرر|احذف\s*محرر|ارسل\s*\S+|ايقاف\s*التقرير|تشغيل\s*التقرير|تسجيل\s*بيانات\s*المنصة|انواع\s*الرسائل|اسماء\s+\S+|كل\s*الا?رقام|تأكيد\s*(?:ارسال|إرسال)\s+\S+|(?:اعادة|إعادة)\s*محاولة\s+\S+|استئناف\s*البوت\s+\S+|علم\s*استلام\s*البطاقة\s+\S+|حالة\s*المزارع\s+\S+|سجل\s+\S+|تواصل\s+\S+|تذاكر\s*مفتوحة|ايقاف\s*الارسال|تشغيل\s*الارسال)/i;
   if (CONTROL_COMMAND_PATTERN.test(text)) {
     console.log(`⚠️ رسالة شكلها أمر تحكم ("${text}") من رقم مش متعرف عليه كمحرر/مدير: ${chatId}`);
   }
@@ -2693,6 +2693,53 @@ async function handleControlCommand(msg) {
       } catch (err) {
         console.log(`⚠️ [بطاقة المزارع] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّر تجهيز الشريحة: ${err.message}`);
+      } finally {
+        broadcastInProgress = false;
+      }
+      return;
+    }
+
+    // تقرير "حالة طلبات خدمات المزارعين" (صفحتين PDF + صور): بيتقرا من بوابة مدير علاقات المزارعين على المنصة
+    // قبل كل إرسال، وبيتفحص (عدّادات المنصة = المقروء) وإلا ما بيتبعتش
+    if (/^(?:(?:تقرير\s*)?(?:حالة\s*)?طلبات\s*(?:خدمات\s*)?(?:ال)?مزارعين|farmer\s*requests)$/i.test(text)) {
+      if (!portalSync.isConfigured()) {
+        await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      if (broadcastInProgress) {
+        await safeReply(msg, "⏳ فيه مهمة تانية شغّالة (إرسال أو مزامنة) - جرّب بعد دقائق.");
+        return;
+      }
+      await safeReply(msg, "⏳ بجيب طلبات المزارعين من المنصة وبجهّز التقرير (حوالي دقيقتين)...");
+      broadcastInProgress = true;
+      try {
+        const fr = require("./lib/farmerRequests");
+        const raw = await boundedCall("farmer-requests-fetch", () => require("./lib/portalScraper").fetchFarmerRequests(), 4 * 60 * 1000);
+        const data = fr.computeFarmerRequests(raw);
+        const check = fr.validateFarmerRequests(data);
+        if (check.errors.length) {
+          await safeReply(msg, `⛔ ما أرسلت التقرير لأن قراءة المنصة غير مطابقة (حتى لا تظهر أرقام غلط):\n• ${check.errors.join("\n• ")}\nحاول بعد قليل، أو راجع المنصة.`);
+          return;
+        }
+        const files = await boundedCall("farmer-requests-render", () => require("./lib/farmerRequestsRender").renderFarmerRequestsFiles(data), 3 * 60 * 1000);
+        const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Riyadh" });
+        const chatId = msg.from;
+        const toMedia = (buf, mime, name) => new MessageMedia(mime, buf.toString("base64"), name);
+        await safeReply(
+          msg,
+          `📊 حالة طلبات خدمات المزارعين - ${dateStr}\n\n` +
+            `الإجمالي: ${data.total}\n• مفتوحة: ${data.open} (${data.openPct}٪)\n• بلا حركة ${fr.STALLED_DAYS} أيام فأكثر: ${data.stalled}\n` +
+            `• مرفوضة أو ملغاة: ${data.closedNoExec}\n• مكتملة ومغلقة: ${data.done}\n\n` +
+            (check.warnings.length ? `⚠️ ${check.warnings.join("\n⚠️ ")}\n` : "") +
+            "✅ تم التحقق: الأرقام مطابقة لعدّادات المنصة."
+        );
+        for (let i = 0; i < files.pngs.length; i++) {
+          await boundedCall("farmer-requests-send-png", () => client.sendMessage(chatId, toMedia(files.pngs[i], "image/png", `Farmer Requests ${dateStr} p${i + 1}.png`)), 60000);
+        }
+        await boundedCall("farmer-requests-send-pdf", () => client.sendMessage(chatId, toMedia(files.pdf, "application/pdf", `Farmer Requests ${dateStr}.pdf`), { sendMediaAsDocument: true }), 60000);
+      } catch (err) {
+        console.log(`⚠️ [طلبات المزارعين] فشل: ${err.message}`);
+        await safeReply(msg, `⚠️ تعذّر تجهيز التقرير: ${err.message}`);
       } finally {
         broadcastInProgress = false;
       }
