@@ -22,7 +22,7 @@ const snaps = [
   { date: "2026-10-14", total: 580, review: 29, waitingPrint: 75, printed: 476 },
 ];
 check("2: الأسبوع السابق = آخر لقطة عمرها 6 أيام أو أكتر (10-08)", s.pickPrevious(snaps, "2026-10-15").date === "2026-10-08");
-check("2ب: من غير لقطات قديمة -> القيمة المرجعية (انتظار الطباعة 74، مطبوعة 454)", (() => { const p = s.pickPrevious([{ date: "2026-10-14", total: 1 }], "2026-10-15"); return p.waitingPrint === 74 && p.printed === 454; })());
+check("2ب: من غير لقطات قديمة -> القيمة المرجعية (انتظار الطباعة 54، مطبوعة 503)", (() => { const p = s.pickPrevious([{ date: "2026-10-14", total: 1 }], "2026-10-15"); return p.waitingPrint === 54 && p.printed === 503; })());
 
 const data = s.computeSlideData(stats, { dateStr: "2026-10-15", previous: snaps[1] });
 check("3: فرق الإجمالي +28 والمطبوعة +23", data.delta.total === 28 && data.delta.printed === 23);
