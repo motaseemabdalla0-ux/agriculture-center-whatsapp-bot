@@ -587,7 +587,15 @@ async function sendDocumentsRequestBroadcast() {
   });
 }
 
+// دعوة التسجيل في بطاقة المزرعة موقوفة نهائيًا بطلب الإدارة - كل المسارات (أمر "ارسل دعوة" / ملف trigger /
+// مجلد درايف / npm run) بتعدّي من الدالة دي، فالمنع هنا بيغطّيها كلها. لإعادة التشغيل غيّر الثابت لـtrue.
+const REGISTRATION_INVITATION_ENABLED = false;
+
 async function sendRegistrationInvitationBroadcast() {
+  if (!REGISTRATION_INVITATION_ENABLED) {
+    console.log("⛔ [دعوة للتسجيل] موقوفة بطلب الإدارة - ما اتبعتش أي رسالة.");
+    return;
+  }
   const template = getCfgText("REGISTRATION_INVITATION_TEMPLATE").replace(
     "{link}",
     getCfgText("REGISTRATION_LINK")
@@ -2078,6 +2086,10 @@ async function handleControlCommand(msg) {
     }
 
     if (/^ارسل\s*دعوة$/i.test(text)) {
+      if (!REGISTRATION_INVITATION_ENABLED) {
+        await msg.reply("⛔ دعوة التسجيل في بطاقة المزرعة موقوفة بطلب الإدارة، ولم يُرسل شيء.");
+        return;
+      }
       if (!fs.existsSync(REGISTRATION_INVITATION_CSV)) {
         await msg.reply('⚠️ لسه مفيش ملف بيانات دعوة متبعت. ابعت الملف الأول بتعليق "دعوة".');
         return;
