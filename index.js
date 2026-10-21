@@ -1353,6 +1353,13 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   return true;
 }
 
+// آخر رسائل مجموعات وصلت للبوت (للتشخيص بأمر "رسائل المجموعات" من غير ما نحتاج لوج الجهاز)
+const recentGroupMessages = [];
+function recordGroupMessage(groupId, author, body, note = "") {
+  recentGroupMessages.push({ at: new Date().toISOString(), groupId, author: author || "", body: String(body || "").slice(0, 60), note });
+  while (recentGroupMessages.length > 15) recentGroupMessages.shift();
+}
+
 // هل مرسل رسالة المجموعة مدير/محرر/أدمن؟ (نفس منطق التحقق في ربط المجموعة، بما فيه ترجمة معرّف @lid)
 async function isTrustedGroupSender(msg, senderId) {
   const allowed = [...editorStore.getEditors(), ...(cfg.ADMIN_NUMBERS || []), ...adminStore.getAdmins()];
@@ -1377,6 +1384,7 @@ async function maybeSendOpenRequestsToGroup(msg, groupId, senderId, trusted = fa
   if (!/^ارسل\s*(?:كل\s*)?طلبات\s*(?:ال)?توصيل(?:\s*(?:هنا|للمجموعة))?$/.test(toWesternDigits((msg.body || "").trim()))) return false;
   if (!trusted && !(await isTrustedGroupSender(msg, senderId))) {
     console.log(`🚫 [طلبات التوصيل] أمر من مرسل غير مصرّح (${senderId}) في ${groupId} - تجاهل.`);
+    recordGroupMessage(groupId, senderId, msg.body, "⛔ مرسل غير مصرّح (مش مدير/محرر)");
     return false;
   }
   if (openRequestsSendLock.has(groupId)) return true;
@@ -1847,6 +1855,7 @@ client.on("message", async (msg) => {
   // (نتأكد من شكل الرقم مباشرة بدل msg.getChat() اللي بتفشل حاليًا
   // بسبب نفس مشكلة تحديث واتساب ويب اللي كسرت إرسال الردود)
   if (msg.from.endsWith("@g.us")) {
+    recordGroupMessage(msg.from, msg.author, msg.body);
     if (await maybeHandleDeliveryOutcome(msg, msg.from)) return;
     if (await maybeSendOpenRequestsToGroup(msg, msg.from, msg.author)) return;
     await maybeRegisterDeliveryGroup(msg, msg.from, msg.author, false);
@@ -2825,6 +2834,20 @@ async function handleControlCommand(msg) {
       } finally {
         broadcastInProgress = false;
       }
+      return;
+    }
+
+    // تشخيص: آخر رسائل المجموعات اللي وصلت للبوت (هل بيستقبل رسائل مجموعة "توصيل"؟ ومن أي مرسل؟)
+    if (/^رسائل\s*(?:ال)?مجموعات$/i.test(text)) {
+      if (recentGroupMessages.length === 0) {
+        await safeReply(msg, "ℹ️ ما وصلت للبوت أي رسالة من أي مجموعة منذ آخر تشغيل. غالبًا رقم البوت مش عضو في المجموعة، أو الرسالة ما اتبعتتش.");
+        return;
+      }
+      const lines = recentGroupMessages
+        .slice()
+        .reverse()
+        .map((m, i) => `${i + 1}. ${m.at.slice(11, 19)} | ${m.groupId}\n   المرسل: ${m.author || "؟"}\n   النص: ${m.body}${m.note ? `\n   ${m.note}` : ""}`);
+      await safeReply(msg, `📋 آخر رسائل المجموعات اللي وصلت للبوت:\n\n${lines.join("\n\n")}`);
       return;
     }
 
@@ -3940,6 +3963,7 @@ client.on("message_create", async (msg) => {
   // البوت نفسه (contact.isMe) قبل ما نعتبرها محادثة رسائلي.
   // رسالة من رقم البوت نفسه جوّه مجموعة (مالك الرقم بيربط مجموعة توصيل)
   if (msg.to && msg.to.endsWith("@g.us")) {
+    recordGroupMessage(msg.to, "(رقم البوت نفسه)", msg.body);
     if (await maybeSendOpenRequestsToGroup(msg, msg.to, null, true)) return;
     await maybeRegisterDeliveryGroup(msg, msg.to, null, true);
     return;
