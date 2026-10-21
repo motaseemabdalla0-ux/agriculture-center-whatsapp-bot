@@ -24,7 +24,7 @@ const {
 const { buildPendingItemsReport, formatPendingItemsReport } = require("./lib/pendingItemsReport");
 const { buildDeliveryDailyReport, formatDeliveryDailyReport } = require("./lib/deliveryReport");
 const { applyDeliveredFromPortal, saveDeliveredSnapshot, matchDelivered } = require("./lib/portalDeliveryCheck");
-const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName } = require("./lib/deliveryFullReport");
+const { buildFullReport, formatFullReportMessage, formatPrepList, buildFullReportBuffer, reportFileName, buildPrepBuffer, prepFileName, formatDeliveredReport, buildDeliveredBuffer, deliveredFileName } = require("./lib/deliveryFullReport");
 const { parseOutcomeCommand, buildFailedNotice, platformNumberFor, classifyFreeText, extractRequestId } = require("./lib/deliveryOutcome");
 const deliveryStore = require("./lib/deliveryStore");
 const deliveryFlow = require("./lib/deliveryFlow");
@@ -1076,6 +1076,7 @@ function watchForTriggers() {
     await maybeSendPendingItemsReminder();
     await maybeSendDeliveryDailyReport();
     await maybeSendPrepListDaily();
+    await maybeSendScheduledDeliveryReports();
     // ملحوظة: التقرير التلقائي متوقف بطلب الإدارة - المديرين هم اللي بيطلبوه يدويًا بكتابة "تقرير"
     // (الدالة maybeSendDailyReport باقية تحت من غير استدعاء، لو حبينا نرجّعها تاني في المستقبل)
   }, 2000);
@@ -1105,11 +1106,12 @@ async function maybeSendPendingItemsReminder() {
 // بيبعت ملف Excel بتفاصيل طلبات التوصيل لمحادثة معيّنة (بيستخدم نفس الـdata اللي اتبنى منها النص)
 async function sendDeliveryReportFile(chatId, data, kind = "full") {
   const prep = kind === "prep";
-  const buffer = prep ? await buildPrepBuffer(data) : await buildFullReportBuffer(data);
+  const delivered = kind === "delivered";
+  const buffer = prep ? await buildPrepBuffer(data) : delivered ? await buildDeliveredBuffer(data) : await buildFullReportBuffer(data);
   const media = new MessageMedia(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     buffer.toString("base64"),
-    prep ? prepFileName(data.now) : reportFileName(data.now)
+    prep ? prepFileName(data.now) : delivered ? deliveredFileName(data.now) : reportFileName(data.now)
   );
   // معرّف @lid بيفشل مع إرسال الملفات (getChat مكسورة) - بنفضّل رقم الجوال الحقيقي (@c.us) لو معروف
   const candidates = [];
@@ -1158,6 +1160,66 @@ async function maybeSendPrepListDaily() {
     }
   }
   console.log(`📋 اتبعت قائمة تجهيز البطاقات لـ ${recipients.length} رقم.`);
+}
+
+// تقارير التسليم المجدولة لمستقبلين معيّنين (أمر "اضف رقم تقارير التسليم"): كل يوم أحد وأربعاء
+//  • الساعة 8 صباحًا: كشف طلبات التوصيل (ملخص + Excel)      • الساعة 2 ظهرًا: كشف البطاقات اللي تم توصيلها (ملخص + Excel)
+// كل فترة بتُرسل مرة واحدة لكل رقم في اليوم (محفوظة، فمفيش تكرار بعد إعادة التشغيل)، ونافذتها بتنتهي (8-14 و14-20)
+const SCHEDULE_DAYS = [0, 3]; // الأحد والأربعاء
+const SCHEDULE_SLOTS = [
+  { key: "am", from: 8, to: 14, kind: "requests" },
+  { key: "pm", from: 14, to: 20, kind: "delivered" },
+];
+
+function riyadhNow() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Riyadh", weekday: "short", hour: "numeric", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date())
+    .reduce((o, p) => ((o[p.type] = p.value), o), {});
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
+  return { dow, hour: parseInt(parts.hour, 10) % 24, date: `${parts.year}-${parts.month}-${parts.day}` };
+}
+
+// بيبعت تقرير واحد لرقم واحد (kind: "requests" = كشف طلبات التوصيل، "delivered" = كشف البطاقات اللي اتوصّلت)
+async function sendScheduleReportTo(phone, kind, data) {
+  const target = `${phone}@c.us`;
+  if (kind === "delivered") {
+    await client.sendMessage(target, formatDeliveredReport(data));
+    await sendDeliveryReportFile(target, data, "delivered");
+  } else {
+    await client.sendMessage(target, formatFullReportMessage(data));
+    if (data.total > 0) await sendDeliveryReportFile(target, data);
+  }
+}
+
+let scheduleRunning = false;
+async function maybeSendScheduledDeliveryReports() {
+  if (scheduleRunning) return;
+  const recipients = deliveryStore.getScheduleRecipients();
+  if (recipients.length === 0) return;
+  const { dow, hour, date } = riyadhNow();
+  if (!SCHEDULE_DAYS.includes(dow)) return;
+  const slot = SCHEDULE_SLOTS.find((s) => hour >= s.from && hour < s.to);
+  if (!slot) return;
+  const pending = recipients.filter((p) => !deliveryStore.wasScheduleSent(`${date}:${slot.key}:${p}`));
+  if (pending.length === 0) return;
+  scheduleRunning = true;
+  try {
+    await refreshDeliveriesBeforeReport();
+    const data = buildFullReport();
+    for (const phone of pending) {
+      try {
+        await sendScheduleReportTo(phone, slot.kind, data);
+        deliveryStore.markScheduleSent(`${date}:${slot.key}:${phone}`);
+        console.log(`📅 [تقارير مجدولة] اتبعت ${slot.kind === "delivered" ? "كشف البطاقات الموصَّلة" : "كشف طلبات التوصيل"} لـ ${phone}.`);
+      } catch (err) {
+        console.log(`⚠️ [تقارير مجدولة] فشل إرسال ${slot.kind} لـ ${phone}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    console.log(`⚠️ [تقارير مجدولة] تعذّر التجهيز: ${err.message}`);
+  } finally {
+    scheduleRunning = false;
+  }
 }
 
 async function maybeSendDeliveryDailyReport() {
@@ -3206,7 +3268,46 @@ async function handleControlCommand(msg) {
       return;
     }
 
-    const removeDeliveryReportMatch = toWesternDigits(text).match(/^احذف\s*رقم\s*تقرير\s*التوصيل\s+(\d{8,15}(?:@lid)?)$/i);
+    // مستقبل "تقارير التسليم المجدولة" (الأحد والأربعاء: 8 ص كشف طلبات التوصيل، 2 م كشف البطاقات الموصَّلة).
+    // عند الإضافة بيتبعتله التقريران فورًا كمان (مرة واحدة)
+    const addScheduleMatch = toWesternDigits(text).match(/^اضف\s*رقم\s*تقارير\s*(?:ال)?تسليم\s+(\d{8,15})$/i);
+    if (addScheduleMatch) {
+      const phone = normalizeSaudiPhone(addScheduleMatch[1]);
+      if (!isValidSaudiPhone(phone)) {
+        await msg.reply("⚠️ الرقم غير صالح. اكتبه بصيغة 9665XXXXXXXX.");
+        return;
+      }
+      const added = deliveryStore.addScheduleRecipient(phone);
+      await msg.reply(
+        `${added ? "✅ تمت إضافة" : "ℹ️ الرقم مضاف بالفعل:"} ${phone} لتقارير التسليم المجدولة (الأحد والأربعاء: 8 صباحًا كشف طلبات التوصيل، 2 ظهرًا كشف البطاقات الموصَّلة).\n⏳ بجهّز التقريرين وببعتهم له الآن...`
+      );
+      try {
+        const rf = await refreshDeliveriesOnDemand(msg);
+        if (rf.note) await safeReply(msg, rf.note);
+        const data = buildFullReport();
+        await sendScheduleReportTo(phone, "requests", data);
+        await sendScheduleReportTo(phone, "delivered", data);
+        await msg.reply(`✅ اتبعت التقريران لـ ${phone}.`);
+      } catch (err) {
+        await safeReply(msg, `⚠️ اتسجّل الرقم لكن تعذّر إرسال التقريرين الآن: ${err.message}`);
+      }
+      return;
+    }
+
+    const removeScheduleMatch = toWesternDigits(text).match(/^احذف\s*رقم\s*تقارير\s*(?:ال)?تسليم\s+(\d{8,15})$/i);
+    if (removeScheduleMatch) {
+      const removed = deliveryStore.removeScheduleRecipient(normalizeSaudiPhone(removeScheduleMatch[1]));
+      await msg.reply(removed ? "✅ تم الحذف من تقارير التسليم المجدولة." : "ℹ️ الرقم مش موجود أصلًا.");
+      return;
+    }
+
+    if (/^ارقام\s*تقارير\s*(?:ال)?تسليم$/i.test(text)) {
+      const list = deliveryStore.getScheduleRecipients();
+      await msg.reply(`📋 مستقبلو تقارير التسليم المجدولة (الأحد والأربعاء 8 ص و2 م):\n\n${list.length ? list.join("\n") : "لا يوجد"}`);
+      return;
+    }
+
+    const removeDeliveryReportMatch =toWesternDigits(text).match(/^احذف\s*رقم\s*تقرير\s*التوصيل\s+(\d{8,15}(?:@lid)?)$/i);
     if (removeDeliveryReportMatch) {
       const phone = removeDeliveryReportMatch[1];
       const removed = deliveryStore.removeReportRecipient(phone);
