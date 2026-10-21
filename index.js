@@ -554,6 +554,7 @@ async function sendRegistrationStatusBroadcast() {
     logLabel: "حالة التسجيل",
     campaignType: "registration_status",
     messageSource: "SYSTEM_NOTIFICATION",
+    nameFromRequestOnly: true, // الاسم من بيانات الطلب فقط - بدون سجل الأسماء المحفوظ
   });
 }
 
@@ -566,6 +567,7 @@ async function sendCardPickupBroadcast() {
     logLabel: "استلام البطاقة",
     campaignType: "card_pickup",
     messageSource: "SYSTEM_NOTIFICATION",
+    nameFromRequestOnly: true, // الاسم من بيانات الطلب فقط - بدون سجل الأسماء المحفوظ
     // حالة انتظار رد "استلام/توصيل" بتتفعّل بس لو نص الرسالة المُرسلة فعلًا بيعرض خيار التوصيل
     onSent: ({ phone, name }) => {
       if (deliveryStore.templateOffersDelivery(getCfgText("CARD_PICKUP_TEMPLATE"))) {
@@ -621,6 +623,7 @@ async function sendDraftFormsBroadcast() {
     logLabel: "تذكير درافت",
     campaignType: "draft_reminder",
     messageSource: "CAMPAIGN",
+    nameFromRequestOnly: true, // الاسم من بيانات الطلب فقط - بدون سجل الأسماء المحفوظ
   });
 }
 
