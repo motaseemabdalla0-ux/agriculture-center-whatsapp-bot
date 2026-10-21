@@ -1353,6 +1353,57 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   return true;
 }
 
+// هل مرسل رسالة المجموعة مدير/محرر/أدمن؟ (نفس منطق التحقق في ربط المجموعة، بما فيه ترجمة معرّف @lid)
+async function isTrustedGroupSender(msg, senderId) {
+  const allowed = [...editorStore.getEditors(), ...(cfg.ADMIN_NUMBERS || []), ...adminStore.getAdmins()];
+  let ok = allowed.some((n) => (n.includes("@") ? senderId === n : senderId === `${n}@c.us`));
+  if (!ok && senderId && senderId.endsWith("@lid")) {
+    try {
+      const contact = await boundedCall("group-sender", () => msg.getContact());
+      const rawNumber = (contact && contact.number) || ((contact && contact.id && contact.id._serialized) || "").replace(/@.*/, "");
+      ok = !!rawNumber && allowed.some((n) => !n.includes("@") && n === rawNumber);
+    } catch (err) {
+      console.log(`⚠️ [مجموعة] تعذّر ترجمة معرّف @lid للمرسل: ${err.message}`);
+    }
+  }
+  return ok;
+}
+
+// أمر يُكتب جوّه أي مجموعة (مثلًا مجموعة "توصيل" الجديدة): "ارسل طلبات التوصيل" -> البوت بيبعت للمجموعة دي
+// كل طلبات التوصيل المفتوحة (لسه ما اتوصّلتش) مرة واحدة فقط، بعد ما يحدّث التسليم من المنصة. مفيش أي إرسال
+// تلقائي بعد كده - بيتكرر بس لو الأمر اتكتب تاني. مابيغيّرش حالة أي طلب ولا ربط مجموعات المناطق.
+const openRequestsSendLock = new Set();
+async function maybeSendOpenRequestsToGroup(msg, groupId, senderId, trusted = false) {
+  if (!/^ارسل\s*(?:كل\s*)?طلبات\s*(?:ال)?توصيل(?:\s*(?:هنا|للمجموعة))?$/.test(toWesternDigits((msg.body || "").trim()))) return false;
+  if (!trusted && !(await isTrustedGroupSender(msg, senderId))) {
+    console.log(`🚫 [طلبات التوصيل] أمر من مرسل غير مصرّح (${senderId}) في ${groupId} - تجاهل.`);
+    return false;
+  }
+  if (openRequestsSendLock.has(groupId)) return true;
+  openRequestsSendLock.add(groupId);
+  const say = (text) => boundedCall("open-requests-group-reply", () => client.sendMessage(groupId, text), 20000).catch((e) => console.log(`⚠️ [طلبات التوصيل] فشل الرد في المجموعة: ${e.message}`));
+  try {
+    await say("⏳ بحدّث التسليم من المنصة أولًا عشان ما أبعتش بطاقات اتسلّمت، وبعدها ببعت الطلبات المفتوحة (مرة واحدة)...");
+    await refreshDeliveriesBeforeReport();
+    const data = buildFullReport();
+    const open = data.rows.filter((r) => r.status === "NEW");
+    if (open.length === 0) {
+      await say("✅ لا توجد طلبات توصيل مفتوحة حاليًا.");
+      return true;
+    }
+    await boundedCall("open-requests-group-list", () => client.sendMessage(groupId, formatPrepList(data)), 30000);
+    await sendDeliveryReportFile(groupId, data, "prep");
+    await say(`✅ اتبعت ${open.length} طلب توصيل مفتوح. مش هبعتهم تاني إلا لو كتبت: ارسل طلبات التوصيل`);
+    console.log(`📦 [طلبات التوصيل] اتبعت ${open.length} طلب مفتوح للمجموعة ${groupId} بأمر يدوي.`);
+  } catch (err) {
+    console.log(`⚠️ [طلبات التوصيل] فشل: ${err.message}`);
+    await say(`⚠️ تعذّر إرسال الطلبات: ${err.message}`);
+  } finally {
+    setTimeout(() => openRequestsSendLock.delete(groupId), 60000);
+  }
+  return true;
+}
+
 // نتيجة توصيل من موظف التوصيل: "تم التوصيل D-n" أو "تعذر التوصيل D-n <السبب>". بيرجّع نص الرد
 // اللي يتبعت لموظف التوصيل. allowedRegionKey (لو جوّه مجموعة منطقة): الطلب لازم يكون تابع لنفس
 // المنطقة. لو تعذّر التسليم: بيتسجّل (FAILED_DELIVERY) وبيتبعت للمزارع رسالة بالسبب
@@ -1797,6 +1848,7 @@ client.on("message", async (msg) => {
   // بسبب نفس مشكلة تحديث واتساب ويب اللي كسرت إرسال الردود)
   if (msg.from.endsWith("@g.us")) {
     if (await maybeHandleDeliveryOutcome(msg, msg.from)) return;
+    if (await maybeSendOpenRequestsToGroup(msg, msg.from, msg.author)) return;
     await maybeRegisterDeliveryGroup(msg, msg.from, msg.author, false);
     return;
   }
@@ -3888,6 +3940,7 @@ client.on("message_create", async (msg) => {
   // البوت نفسه (contact.isMe) قبل ما نعتبرها محادثة رسائلي.
   // رسالة من رقم البوت نفسه جوّه مجموعة (مالك الرقم بيربط مجموعة توصيل)
   if (msg.to && msg.to.endsWith("@g.us")) {
+    if (await maybeSendOpenRequestsToGroup(msg, msg.to, null, true)) return;
     await maybeRegisterDeliveryGroup(msg, msg.to, null, true);
     return;
   }
