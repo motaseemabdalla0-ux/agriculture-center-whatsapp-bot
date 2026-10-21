@@ -3394,6 +3394,20 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // كشف البطاقات التي تم توصيلها (ملخص + Excel) عند الطلب - نفس كشف الساعة 2 ظهرًا المجدول
+    if (/^(?:كشف\s*)?(?:ال)?بطاقات\s*(?:التي|اللي)?\s*(?:تم\s*)?(?:توصيلها|الموصلة|الموصّلة)$|^كشف\s*(?:ال)?تسليم$/i.test(text)) {
+      try {
+        const rf = await refreshDeliveriesOnDemand(msg);
+        if (rf.note) await safeReply(msg, rf.note);
+        const data = buildFullReport();
+        await safeReply(msg, formatDeliveredReport(data));
+        await sendDeliveryReportFile(msg.from, data, "delivered");
+      } catch (err) {
+        await safeReply(msg, `⚠️ تعذّر تجهيز كشف البطاقات الموصَّلة: ${err.message}`);
+      }
+      return;
+    }
+
     // استبعاد طلب (تجريبي مثلًا) من أرقام التقرير الكامل - الطلب نفسه بيفضل محفوظ
     const excludeMatch = toWesternDigits(text).match(/^استبعد\s*طلب\s*(?:توصيل\s*)?(D-\d+)\s*(?:من\s*التقرير)?$/i);
     if (excludeMatch) {
