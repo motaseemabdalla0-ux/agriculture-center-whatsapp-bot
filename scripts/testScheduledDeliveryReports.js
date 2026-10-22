@@ -34,7 +34,11 @@ assert.ok(/مزارع 1/.test(msg) && /مزارع 2/.test(msg) && !/مزارع 3
   // مخزن المستقبلين (على ملف مؤقت: بنحفظ ونسترجع ملف التشغيل الحقيقي)
   const store = require("../lib/deliveryStore");
   const real = path.join(__dirname, "..", "delivery_state.json");
+  const realBak = `${real}.bak`;
   const backup = fs.existsSync(real) ? fs.readFileSync(real) : null;
+  const backupBak = fs.existsSync(realBak) ? fs.readFileSync(realBak) : null;
+  // نبدأ من حالة نضيفة (الملف الاحتياطي .bak بيتكوّن تلقائيًا من الكتابة الذرّية وكان بيلوّث التشغيل التالي)
+  [real, realBak].forEach((f) => { if (fs.existsSync(f)) fs.unlinkSync(f); });
   try {
     assert.strictEqual(store.addScheduleRecipient("966501797538"), true);
     assert.strictEqual(store.addScheduleRecipient("966501797538"), false);
@@ -45,7 +49,9 @@ assert.ok(/مزارع 1/.test(msg) && /مزارع 2/.test(msg) && !/مزارع 3
     assert.strictEqual(store.wasScheduleSent("2026-10-21:pm:966501797538"), false);
     assert.strictEqual(store.removeScheduleRecipient("966501797538"), true);
   } finally {
-    if (backup === null) { if (fs.existsSync(real)) fs.unlinkSync(real); } else fs.writeFileSync(real, backup);
+    [[real, backup], [realBak, backupBak]].forEach(([f, b]) => {
+      if (b === null) { if (fs.existsSync(f)) fs.unlinkSync(f); } else fs.writeFileSync(f, b);
+    });
   }
   console.log("✅ كل الفحوصات نجحت");
 })().catch((e) => { console.error("❌", e.message); process.exit(1); });
