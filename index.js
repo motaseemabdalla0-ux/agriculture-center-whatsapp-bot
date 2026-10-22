@@ -1381,7 +1381,9 @@ async function isTrustedGroupSender(msg, senderId) {
 // تلقائي بعد كده - بيتكرر بس لو الأمر اتكتب تاني. مابيغيّرش حالة أي طلب ولا ربط مجموعات المناطق.
 const openRequestsSendLock = new Set();
 async function maybeSendOpenRequestsToGroup(msg, groupId, senderId, trusted = false) {
-  if (!/^ارسل\s*(?:كل\s*)?طلبات\s*(?:ال)?توصيل(?:\s*(?:هنا|للمجموعة))?$/.test(toWesternDigits((msg.body || "").trim()))) return false;
+  const body = toWesternDigits((msg.body || "").trim());
+  const pinsOnly = /^ارسل\s*(?:كل\s*)?مواقع\s*(?:ال)?توصيل(?:\s*(?:هنا|للمجموعة))?$/.test(body); // المواقع بس (من غير القائمة والملف)
+  if (!pinsOnly && !/^ارسل\s*(?:كل\s*)?طلبات\s*(?:ال)?توصيل(?:\s*(?:هنا|للمجموعة))?$/.test(body)) return false;
   if (!trusted && !(await isTrustedGroupSender(msg, senderId))) {
     console.log(`🚫 [طلبات التوصيل] أمر من مرسل غير مصرّح (${senderId}) في ${groupId} - تجاهل.`);
     recordGroupMessage(groupId, senderId, msg.body, "⛔ مرسل غير مصرّح (مش مدير/محرر)");
@@ -1399,9 +1401,27 @@ async function maybeSendOpenRequestsToGroup(msg, groupId, senderId, trusted = fa
       await say("✅ لا توجد طلبات توصيل مفتوحة حاليًا.");
       return true;
     }
-    await boundedCall("open-requests-group-list", () => client.sendMessage(groupId, formatPrepList(data)), 30000);
-    await sendDeliveryReportFile(groupId, data, "prep");
-    await say(`✅ اتبعت ${open.length} طلب توصيل مفتوح. مش هبعتهم تاني إلا لو كتبت: ارسل طلبات التوصيل`);
+    if (!pinsOnly) {
+      await boundedCall("open-requests-group-list", () => client.sendMessage(groupId, formatPrepList(data)), 30000);
+      await sendDeliveryReportFile(groupId, data, "prep");
+    }
+    // موقع كل مزارع (pin حقيقي على الخريطة) باسمه ورقم طلبه، بترتيب المنطقة - بفاصل بسيط بين الرسائل
+    const withPin = open.filter((r) => typeof r.lat === "number" && typeof r.lng === "number").sort((a, b) => String(a.regionKey).localeCompare(String(b.regionKey)));
+    const noPin = open.filter((r) => !(typeof r.lat === "number" && typeof r.lng === "number"));
+    let pinsSent = 0;
+    for (const r of withPin) {
+      try {
+        await boundedCall("open-requests-pin", () => client.sendMessage(groupId, new Location(r.lat, r.lng, { name: `${r.name || "مزارع"} - طلب ${r.number}`, address: r.region })), 20000);
+        pinsSent++;
+      } catch (err) {
+        console.log(`⚠️ [طلبات التوصيل] فشل إرسال موقع ${r.id}: ${err.message}`);
+      }
+      await new Promise((res) => setTimeout(res, 3000 + Math.random() * 3000));
+    }
+    if (noPin.length) {
+      await say(`ℹ️ ${noPin.length} طلب بدون موقع محدَّد على الخريطة (اختار المزارع منطقته يدويًا): ${noPin.map((r) => `${r.name || r.phone} (طلب ${r.number})`).join("، ")}`);
+    }
+    await say(`✅ اتبعت ${open.length} طلب توصيل مفتوح (${pinsSent} موقع على الخريطة). مش هبعتهم تاني إلا لو كتبت: ارسل طلبات التوصيل (أو ارسل مواقع التوصيل للمواقع بس)`);
     console.log(`📦 [طلبات التوصيل] اتبعت ${open.length} طلب مفتوح للمجموعة ${groupId} بأمر يدوي.`);
   } catch (err) {
     console.log(`⚠️ [طلبات التوصيل] فشل: ${err.message}`);
