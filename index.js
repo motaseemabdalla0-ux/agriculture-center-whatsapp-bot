@@ -1162,14 +1162,11 @@ async function maybeSendPrepListDaily() {
   console.log(`📋 اتبعت قائمة تجهيز البطاقات لـ ${recipients.length} رقم.`);
 }
 
-// تقارير التسليم المجدولة لمستقبلين معيّنين (أمر "اضف رقم تقارير التسليم"): كل يوم أحد وأربعاء
-//  • الساعة 8 صباحًا: كشف طلبات التوصيل (ملخص + Excel)      • الساعة 2 ظهرًا: كشف البطاقات اللي تم توصيلها (ملخص + Excel)
-// كل فترة بتُرسل مرة واحدة لكل رقم في اليوم (محفوظة، فمفيش تكرار بعد إعادة التشغيل)، ونافذتها بتنتهي (8-14 و14-20)
-const SCHEDULE_DAYS = [0, 3]; // الأحد والأربعاء
-const SCHEDULE_SLOTS = [
-  { key: "am", from: 8, to: 14, kind: "requests" },
-  { key: "pm", from: 14, to: 20, kind: "delivered" },
-];
+// تقارير التسليم المجدولة لمستقبلين معيّنين (أمر "اضف رقم تقارير التسليم"): كل يوم سبت وثلاثاء الساعة 8 صباحًا
+// بيتبعت التقريران مع بعض: كشف طلبات التوصيل (ملخص + Excel) ثم كشف البطاقات اللي تم توصيلها (ملخص + Excel)
+// بتُرسل مرة واحدة لكل رقم في اليوم (محفوظة، فمفيش تكرار بعد إعادة التشغيل)، ونافذتها من 8 لحد 14
+const SCHEDULE_DAYS = [6, 2]; // السبت والثلاثاء
+const SCHEDULE_SLOTS = [{ key: "am", from: 8, to: 14, kind: "both" }];
 
 function riyadhNow() {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Riyadh", weekday: "short", hour: "numeric", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" })
@@ -1182,7 +1179,10 @@ function riyadhNow() {
 // بيبعت تقرير واحد لرقم واحد (kind: "requests" = كشف طلبات التوصيل، "delivered" = كشف البطاقات اللي اتوصّلت)
 async function sendScheduleReportTo(phone, kind, data) {
   const target = `${phone}@c.us`;
-  if (kind === "delivered") {
+  if (kind === "both") {
+    await sendScheduleReportTo(phone, "requests", data);
+    await sendScheduleReportTo(phone, "delivered", data);
+  } else if (kind === "delivered") {
     await client.sendMessage(target, formatDeliveredReport(data));
     await sendDeliveryReportFile(target, data, "delivered");
   } else {
@@ -1210,7 +1210,7 @@ async function maybeSendScheduledDeliveryReports() {
       try {
         await sendScheduleReportTo(phone, slot.kind, data);
         deliveryStore.markScheduleSent(`${date}:${slot.key}:${phone}`);
-        console.log(`📅 [تقارير مجدولة] اتبعت ${slot.kind === "delivered" ? "كشف البطاقات الموصَّلة" : "كشف طلبات التوصيل"} لـ ${phone}.`);
+        console.log(`📅 [تقارير مجدولة] اتبعت كشف طلبات التوصيل وكشف البطاقات الموصَّلة لـ ${phone}.`);
       } catch (err) {
         console.log(`⚠️ [تقارير مجدولة] فشل إرسال ${slot.kind} لـ ${phone}: ${err.message}`);
       }
@@ -3363,9 +3363,9 @@ async function handleControlCommand(msg) {
       return;
     }
 
-    // مستقبل "تقارير التسليم المجدولة" (الأحد والأربعاء: 8 ص كشف طلبات التوصيل، 2 م كشف البطاقات الموصَّلة).
-    // عند الإضافة بيتبعتله التقريران فورًا كمان (مرة واحدة)
-    const addScheduleMatch = toWesternDigits(text).match(/^اضف\s*رقم\s*تقارير\s*(?:ال)?تسليم\s+(\d{8,15})$/i);
+    // مستقبل "تقارير التسليم المجدولة" (السبت والثلاثاء 8 صباحًا: كشف طلبات التوصيل + كشف البطاقات الموصَّلة).
+    // عند الإضافة بيتبعتله التقريران فورًا كمان (مرة واحدة) - إلا لو كتبت في الآخر "بدون ارسال"
+    const addScheduleMatch = toWesternDigits(text).match(/^اضف\s*رقم\s*تقارير\s*(?:ال)?تسليم\s+(\d{8,15})(\s+بدون\s*[اإ]رسال)?$/i);
     if (addScheduleMatch) {
       const phone = normalizeSaudiPhone(addScheduleMatch[1]);
       if (!isValidSaudiPhone(phone)) {
@@ -3373,15 +3373,16 @@ async function handleControlCommand(msg) {
         return;
       }
       const added = deliveryStore.addScheduleRecipient(phone);
+      const skipNow = !!addScheduleMatch[2];
       await msg.reply(
-        `${added ? "✅ تمت إضافة" : "ℹ️ الرقم مضاف بالفعل:"} ${phone} لتقارير التسليم المجدولة (الأحد والأربعاء: 8 صباحًا كشف طلبات التوصيل، 2 ظهرًا كشف البطاقات الموصَّلة).\n⏳ بجهّز التقريرين وببعتهم له الآن...`
+        `${added ? "✅ تمت إضافة" : "ℹ️ الرقم مضاف بالفعل:"} ${phone} لتقارير التسليم المجدولة (السبت والثلاثاء 8 صباحًا: كشف طلبات التوصيل وكشف البطاقات الموصَّلة).${skipNow ? "\nℹ️ بدون إرسال الآن، أول إرسال في الموعد المجدول." : "\n⏳ بجهّز التقريرين وببعتهم له الآن..."}`
       );
+      if (skipNow) return;
       try {
         const rf = await refreshDeliveriesOnDemand(msg);
         if (rf.note) await safeReply(msg, rf.note);
         const data = buildFullReport();
-        await sendScheduleReportTo(phone, "requests", data);
-        await sendScheduleReportTo(phone, "delivered", data);
+        await sendScheduleReportTo(phone, "both", data);
         await msg.reply(`✅ اتبعت التقريران لـ ${phone}.`);
       } catch (err) {
         await safeReply(msg, `⚠️ اتسجّل الرقم لكن تعذّر إرسال التقريرين الآن: ${err.message}`);
@@ -3398,7 +3399,7 @@ async function handleControlCommand(msg) {
 
     if (/^ارقام\s*تقارير\s*(?:ال)?تسليم$/i.test(text)) {
       const list = deliveryStore.getScheduleRecipients();
-      await msg.reply(`📋 مستقبلو تقارير التسليم المجدولة (الأحد والأربعاء 8 ص و2 م):\n\n${list.length ? list.join("\n") : "لا يوجد"}`);
+      await msg.reply(`📋 مستقبلو تقارير التسليم المجدولة (السبت والثلاثاء 8 ص):\n\n${list.length ? list.join("\n") : "لا يوجد"}`);
       return;
     }
 
