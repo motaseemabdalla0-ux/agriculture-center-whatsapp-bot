@@ -893,12 +893,15 @@ async function reconcileDeliveriesWithPortal() {
   const groups = deliveryStore.getGroups();
   for (const u of updated) {
     const groupId = groups[u.regionKey];
-    if (!groupId) continue;
-    try {
-      await boundedCall("portal-delivered-notice", () => client.sendMessage(groupId, `✅ الطلب ${u.id} (${u.name || u.phone}) ظاهر "تم التسليم" في المنصة - تم تسجيله توصيلًا.`), 15000);
-    } catch (err) {
-      console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
+    const notice = `✅ الطلب ${u.id} (${u.name || u.phone}) ظاهر "تم التسليم" في المنصة - تم تسجيله توصيلًا.`;
+    if (groupId) {
+      try {
+        await boundedCall("portal-delivered-notice", () => client.sendMessage(groupId, notice), 15000);
+      } catch (err) {
+        console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
+      }
     }
+    await notifyMirrorGroup(notice); // نسخة للمجموعة العامة
   }
   const expectedNote = rows.searched ? ` (التاب بيعرض ${rows.expected}، قرأنا بالترقيم جزء وبحثنا بالجوال عن الطلبات المفتوحة)` : rows.expected && rows.expected !== rows.length ? ` (⚠️ التاب بيعرض ${rows.expected} - القراءة ناقصة)` : "";
   const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة${expectedNote}، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
@@ -1353,6 +1356,41 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
   return true;
 }
 
+// المجموعة العامة ("توصيل"): ربط/إلغاء ربط بأمر يُكتب جوّاها من مدير/محرر:
+//   "ربط مجموعة الكل"  -> بتستلم نسخة من كل طلب توصيل جديد (أي منطقة) فور وصوله + مواقعه + تحديثات التسليم/التعذّر
+//   "الغاء ربط مجموعة الكل" -> توقف النسخ. مجموعات المناطق (الشمال/الجنوب/الوسط) مابتتأثرش خالص
+async function maybeHandleMirrorGroupCommand(msg, groupId, senderId, trusted = false) {
+  const body = toWesternDigits((msg.body || "").trim());
+  const bind = /^ربط\s*مجموعة\s*(?:الكل|الجميع|التوصيل|توصيل)$/.test(body);
+  const unbind = /^(?:الغاء|إلغاء|الغاء\s*ال)\s*ربط\s*مجموعة\s*(?:الكل|الجميع|التوصيل|توصيل)$/.test(body);
+  if (!bind && !unbind) return false;
+  if (!trusted && !(await isTrustedGroupSender(msg, senderId))) {
+    console.log(`🚫 [المجموعة العامة] أمر من مرسل غير مصرّح (${senderId}) في ${groupId} - تجاهل.`);
+    recordGroupMessage(groupId, senderId, msg.body, "⛔ مرسل غير مصرّح (مش مدير/محرر)");
+    return false;
+  }
+  if (bind) {
+    deliveryStore.setMirrorGroup(groupId);
+    console.log(`✅ [المجموعة العامة] تم ربط ${groupId}.`);
+    await safeReply(msg, "✅ تم ربط هذه المجموعة بنسخة من كل طلبات التوصيل (كل المناطق): كل طلب جديد بيوصل هنا فورًا مع موقعه، وكمان إشعار لما يتسجّل تسليمه أو تعذّره. مجموعات المناطق شغالة زي ما هي. لإيقاف النسخ اكتب: الغاء ربط مجموعة الكل");
+  } else {
+    const had = deliveryStore.clearMirrorGroup();
+    await safeReply(msg, had ? "✅ تم إيقاف نسخ طلبات التوصيل لهذه المجموعة." : "ℹ️ هذه المجموعة غير مربوطة أصلًا.");
+  }
+  return true;
+}
+
+// إشعار قصير للمجموعة العامة (best-effort) - تسليم/تعذّر طلب
+async function notifyMirrorGroup(text) {
+  const mirrorId = deliveryStore.getMirrorGroup();
+  if (!mirrorId) return;
+  try {
+    await boundedCall("mirror-group-notice", () => client.sendMessage(mirrorId, text), 15000);
+  } catch (err) {
+    console.log(`⚠️ [المجموعة العامة] فشل الإشعار: ${err.message}`);
+  }
+}
+
 // آخر رسائل مجموعات وصلت للبوت (للتشخيص بأمر "رسائل المجموعات" من غير ما نحتاج لوج الجهاز)
 const recentGroupMessages = [];
 function recordGroupMessage(groupId, author, body, note = "") {
@@ -1450,11 +1488,13 @@ async function processDeliveryOutcome(cmd, allowedRegionKey = null) {
       return `📝 تم استلام إفادتك بتسليم الطلب ${request.id}. الحالة بتتحدّث تلقائيًا من المنصة بمجرد تسجيل التسليم هناك (التوقيع)، فتأكد إنه اتسجّل في المنصة.`;
     }
     const done = deliveryStore.markDelivered(cmd.id);
+    if (done) await notifyMirrorGroup(`✅ تم توصيل الطلب ${done.id} (${done.name || done.phone}).`);
     return done ? `✅ تم تسجيل توصيل الطلب ${done.id}.` : `⚠️ الطلب ${cmd.id} اتسجّل مسبقًا.`;
   }
 
   const failed = deliveryStore.markFailed(cmd.id, cmd.reason);
   if (!failed) return `⚠️ الطلب ${cmd.id} اتقفل قبل كده (تم التوصيل أو تعذّر).`;
+  await notifyMirrorGroup(`❌ تعذّر توصيل الطلب ${failed.id} (${failed.name || failed.phone}) - السبب: ${cmd.reason || "غير مذكور"}`);
   try {
     const text = buildFailedNotice(getCfgText("DELIVERY_FAILED_NOTICE"), failed, cmd.reason, platformNumberFor(failed.phone));
     await boundedCall("delivery-failed-notice", () => client.sendMessage(`${failed.phone}@c.us`, text), 20000);
@@ -1877,6 +1917,7 @@ client.on("message", async (msg) => {
   if (msg.from.endsWith("@g.us")) {
     recordGroupMessage(msg.from, msg.author, msg.body);
     if (await maybeHandleDeliveryOutcome(msg, msg.from)) return;
+    if (await maybeHandleMirrorGroupCommand(msg, msg.from, msg.author)) return;
     if (await maybeSendOpenRequestsToGroup(msg, msg.from, msg.author)) return;
     await maybeRegisterDeliveryGroup(msg, msg.from, msg.author, false);
     return;
@@ -3985,6 +4026,7 @@ client.on("message_create", async (msg) => {
   // رسالة من رقم البوت نفسه جوّه مجموعة (مالك الرقم بيربط مجموعة توصيل)
   if (msg.to && msg.to.endsWith("@g.us")) {
     recordGroupMessage(msg.to, "(رقم البوت نفسه)", msg.body);
+    if (await maybeHandleMirrorGroupCommand(msg, msg.to, null, true)) return;
     if (await maybeSendOpenRequestsToGroup(msg, msg.to, null, true)) return;
     await maybeRegisterDeliveryGroup(msg, msg.to, null, true);
     return;
