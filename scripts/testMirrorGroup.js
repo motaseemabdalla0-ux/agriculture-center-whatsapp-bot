@@ -57,6 +57,17 @@ files.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
     assert.ok(to("north@g.us").length >= 1);
     assert.ok(!store.findRequest(r.id).mirrored, "ما اتعلّمتش منسوخة لأنها فشلت");
 
+    // 4ب) الجنوب مابيتنسخش للمجموعة العامة (الشمال والوسط بس) لكن مجموعة منطقته بتستلمه
+    store.setGroup("SOUTH", "south@g.us");
+    log.length = 0;
+    r = store.createRequest({ phone: "966500000005", name: "جنوبي", regionKey: "SOUTH", preferredDateTime: "اليوم", latitude: 26.1, longitude: 37.5 });
+    res = await flow.forwardRequest(mk(), r);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(to("south@g.us").length, 2, "مجموعة الجنوب استلمت نص + pin");
+    assert.strictEqual(to("all@g.us").length, 0, "العامة ما استلمتش الجنوب");
+    assert.ok(!store.findRequest(r.id).mirrored);
+    assert.deepStrictEqual(store.MIRROR_REGIONS, ["NORTH", "CENTER"]);
+
     // 5) من غير مجموعة عامة: ما فيش نسخ
     assert.strictEqual(store.clearMirrorGroup(), true);
     log.length = 0;
@@ -64,7 +75,7 @@ files.forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
     await flow.forwardRequest(mk(), r);
     assert.strictEqual(to("all@g.us").length, 0);
     assert.strictEqual(store.clearMirrorGroup(), false);
-    console.log("✅ كل الفحوصات نجحت (5 سيناريوهات)");
+    console.log("✅ كل الفحوصات نجحت (6 سيناريوهات)");
   } finally {
     files.forEach((f, i) => {
       if (backup[i] === null) { if (fs.existsSync(f)) fs.unlinkSync(f); } else fs.writeFileSync(f, backup[i]);

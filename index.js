@@ -901,7 +901,7 @@ async function reconcileDeliveriesWithPortal() {
         console.log(`⚠️ [تسليم المنصة] فشل إشعار المجموعة لـ${u.id}: ${err.message}`);
       }
     }
-    await notifyMirrorGroup(notice); // نسخة للمجموعة العامة
+    await notifyMirrorGroup(notice, u.regionKey); // نسخة للمجموعة العامة (الشمال والوسط)
   }
   const expectedNote = rows.searched ? ` (التاب بيعرض ${rows.expected}، قرأنا بالترقيم جزء وبحثنا بالجوال عن الطلبات المفتوحة)` : rows.expected && rows.expected !== rows.length ? ` (⚠️ التاب بيعرض ${rows.expected} - القراءة ناقصة)` : "";
   const text = `قرأت ${rows.length} بطاقة "تم التسليم" من المنصة${expectedNote}، وتأكّد تسليم ${updated.length} من ${open.length} طلب مفتوح.`;
@@ -1357,7 +1357,7 @@ async function maybeRegisterDeliveryGroup(msg, groupId, senderId, trusted) {
 }
 
 // المجموعة العامة ("توصيل"): ربط/إلغاء ربط بأمر يُكتب جوّاها من مدير/محرر:
-//   "ربط مجموعة الكل"  -> بتستلم نسخة من كل طلب توصيل جديد (أي منطقة) فور وصوله + مواقعه + تحديثات التسليم/التعذّر
+//   "ربط مجموعة الكل"  -> بتستلم نسخة من كل طلب توصيل جديد (الشمال والوسط بس، مش الجنوب) فور وصوله + مواقعه + تحديثات التسليم/التعذّر
 //   "الغاء ربط مجموعة الكل" -> توقف النسخ. مجموعات المناطق (الشمال/الجنوب/الوسط) مابتتأثرش خالص
 async function maybeHandleMirrorGroupCommand(msg, groupId, senderId, trusted = false) {
   const body = toWesternDigits((msg.body || "").trim());
@@ -1372,7 +1372,7 @@ async function maybeHandleMirrorGroupCommand(msg, groupId, senderId, trusted = f
   if (bind) {
     deliveryStore.setMirrorGroup(groupId);
     console.log(`✅ [المجموعة العامة] تم ربط ${groupId}.`);
-    await safeReply(msg, "✅ تم ربط هذه المجموعة بنسخة من كل طلبات التوصيل (كل المناطق): كل طلب جديد بيوصل هنا فورًا مع موقعه، وكمان إشعار لما يتسجّل تسليمه أو تعذّره. مجموعات المناطق شغالة زي ما هي. لإيقاف النسخ اكتب: الغاء ربط مجموعة الكل");
+    await safeReply(msg, "✅ تم ربط هذه المجموعة بنسخة من طلبات التوصيل (الشمال والوسط): كل طلب جديد بيوصل هنا فورًا مع موقعه، وكمان إشعار لما يتسجّل تسليمه أو تعذّره. مجموعات المناطق شغالة زي ما هي. لإيقاف النسخ اكتب: الغاء ربط مجموعة الكل");
   } else {
     const had = deliveryStore.clearMirrorGroup();
     await safeReply(msg, had ? "✅ تم إيقاف نسخ طلبات التوصيل لهذه المجموعة." : "ℹ️ هذه المجموعة غير مربوطة أصلًا.");
@@ -1381,9 +1381,9 @@ async function maybeHandleMirrorGroupCommand(msg, groupId, senderId, trusted = f
 }
 
 // إشعار قصير للمجموعة العامة (best-effort) - تسليم/تعذّر طلب
-async function notifyMirrorGroup(text) {
+async function notifyMirrorGroup(text, regionKey) {
   const mirrorId = deliveryStore.getMirrorGroup();
-  if (!mirrorId) return;
+  if (!mirrorId || !deliveryStore.isMirrorRegion(regionKey)) return; // الشمال والوسط بس
   try {
     await boundedCall("mirror-group-notice", () => client.sendMessage(mirrorId, text), 15000);
   } catch (err) {
@@ -1488,13 +1488,13 @@ async function processDeliveryOutcome(cmd, allowedRegionKey = null) {
       return `📝 تم استلام إفادتك بتسليم الطلب ${request.id}. الحالة بتتحدّث تلقائيًا من المنصة بمجرد تسجيل التسليم هناك (التوقيع)، فتأكد إنه اتسجّل في المنصة.`;
     }
     const done = deliveryStore.markDelivered(cmd.id);
-    if (done) await notifyMirrorGroup(`✅ تم توصيل الطلب ${done.id} (${done.name || done.phone}).`);
+    if (done) await notifyMirrorGroup(`✅ تم توصيل الطلب ${done.id} (${done.name || done.phone}).`, done.regionKey);
     return done ? `✅ تم تسجيل توصيل الطلب ${done.id}.` : `⚠️ الطلب ${cmd.id} اتسجّل مسبقًا.`;
   }
 
   const failed = deliveryStore.markFailed(cmd.id, cmd.reason);
   if (!failed) return `⚠️ الطلب ${cmd.id} اتقفل قبل كده (تم التوصيل أو تعذّر).`;
-  await notifyMirrorGroup(`❌ تعذّر توصيل الطلب ${failed.id} (${failed.name || failed.phone}) - السبب: ${cmd.reason || "غير مذكور"}`);
+  await notifyMirrorGroup(`❌ تعذّر توصيل الطلب ${failed.id} (${failed.name || failed.phone}) - السبب: ${cmd.reason || "غير مذكور"}`, failed.regionKey);
   try {
     const text = buildFailedNotice(getCfgText("DELIVERY_FAILED_NOTICE"), failed, cmd.reason, platformNumberFor(failed.phone));
     await boundedCall("delivery-failed-notice", () => client.sendMessage(`${failed.phone}@c.us`, text), 20000);
