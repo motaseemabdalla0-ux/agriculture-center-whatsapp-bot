@@ -226,8 +226,10 @@ async function run() {
   const cfgSrc = fs.readFileSync(path.join(ROOT, "config.js"), "utf8");
   check("9: CARD_PICKUP_TEMPLATE الرسمي موجود بالكامل", cfgSrc.includes("يسرّنا إشعاركم بجاهزية بطاقة المزارع") && cfgSrc.includes("من مركز الزراعة بحي ساق"));
   const flowSrc = fs.readFileSync(path.join(ROOT, "lib", "deliveryFlow.js"), "utf8") + fs.readFileSync(path.join(ROOT, "lib", "deliveryStore.js"), "utf8");
-  // استدعاءين بس: نص رسالة المجموعة + pin الموقع - الاتنين لمجموعة المنطقة بس
-  check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage (نص + pin موقع) لمجموعة المنطقة", (flowSrc.match(/sendMessage/g) || []).length === 2);
+  // 4 استدعاءات بس: (نص + pin) لمجموعة المنطقة + (نص + pin) نسخة للمجموعة العامة المربوطة بأمر "ربط مجموعة الكل".
+  // ومفيش أي استدعاء إرسال تاني - وكل الاستدعاءات هدفها مجموعة (groupId أو mirrorId) مش مزارع
+  const sendTargets = [...flowSrc.matchAll(/sendMessage\(\s*(\w+)/g)].map((m) => m[1]);
+  check("9ب: منطق التوصيل مفيهوش أي استدعاء واتساب غير client.sendMessage (نص + pin) لمجموعة المنطقة والمجموعة العامة", sendTargets.length === 4 && sendTargets.every((t) => t === "groupId" || t === "mirrorId"));
 
   console.log("\n=== 10) getAllPending + sentTracker.unmarkSent (لإعادة إرسال إشعار الاستلام لمن لسه في انتظار قرار) ===");
   const sentTracker = require("../lib/sentTracker");
