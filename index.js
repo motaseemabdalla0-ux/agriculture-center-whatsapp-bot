@@ -1369,13 +1369,15 @@ async function maybeHandleMirrorGroupCommand(msg, groupId, senderId, trusted = f
     recordGroupMessage(groupId, senderId, msg.body, "⛔ مرسل غير مصرّح (مش مدير/محرر)");
     return false;
   }
+  const groupSay = (text) =>
+    boundedCall("mirror-group-reply", () => client.sendMessage(groupId, text), 20000).catch((e) => console.log(`⚠️ [المجموعة العامة] فشل الرد في المجموعة: ${e.message}`));
   if (bind) {
     deliveryStore.setMirrorGroup(groupId);
     console.log(`✅ [المجموعة العامة] تم ربط ${groupId}.`);
-    await safeReply(msg, "✅ تم ربط هذه المجموعة بنسخة من طلبات التوصيل (الشمال والوسط): كل طلب جديد بيوصل هنا فورًا مع موقعه، وكمان إشعار لما يتسجّل تسليمه أو تعذّره. مجموعات المناطق شغالة زي ما هي. لإيقاف النسخ اكتب: الغاء ربط مجموعة الكل");
+    await groupSay("✅ تم ربط هذه المجموعة بنسخة من طلبات التوصيل (الشمال والوسط): كل طلب جديد بيوصل هنا فورًا مع موقعه، وكمان إشعار لما يتسجّل تسليمه أو تعذّره. مجموعات المناطق شغالة زي ما هي. لإيقاف النسخ اكتب: الغاء ربط مجموعة الكل");
   } else {
     const had = deliveryStore.clearMirrorGroup();
-    await safeReply(msg, had ? "✅ تم إيقاف نسخ طلبات التوصيل لهذه المجموعة." : "ℹ️ هذه المجموعة غير مربوطة أصلًا.");
+    await groupSay(had ? "✅ تم إيقاف نسخ طلبات التوصيل لهذه المجموعة." : "ℹ️ هذه المجموعة غير مربوطة أصلًا.");
   }
   return true;
 }
@@ -2895,6 +2897,14 @@ async function handleControlCommand(msg) {
       } finally {
         broadcastInProgress = false;
       }
+      return;
+    }
+
+    // حالة المجموعة العامة (من المحادثة الخاصة): هل اتربطت؟ وأي مناطق بتتنسخ؟
+    if (/^(?:حالة\s*)?(?:ال)?مجموعة\s*(?:ال)?عامة$/i.test(text)) {
+      const id = deliveryStore.getMirrorGroup();
+      await safeReply(msg, id ? `✅ المجموعة العامة مربوطة: ${id}
+بتستلم نسخة طلبات: الشمال والوسط (مع المواقع وإشعارات التسليم/التعذّر).` : "ℹ️ المجموعة العامة غير مربوطة. اكتب جوّه مجموعة \"توصيل\": ربط مجموعة الكل");
       return;
     }
 
