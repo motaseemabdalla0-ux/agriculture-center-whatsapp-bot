@@ -236,6 +236,9 @@ const INVITATION_TRIGGER_FILE = path.join(__dirname, "SEND_REGISTRATION_INVITATI
 const DRAFT_TRIGGER_FILE = path.join(__dirname, "SEND_DRAFT_FORMS.txt");
 const CUSTOM_MESSAGE_TRIGGER_FILE = path.join(__dirname, "SEND_CUSTOM_MESSAGE.txt");
 let broadcastInProgress = false;
+// قفل منفصل لتقارير القراءة فقط (بطاقة المزارع / طلبات المزارعين): بتقرا من المنصة وبتبعت للي طلبها بس - مالها علاقة
+// بحملات الإرسال، فمابتتأخرش ولا بتتمنع لو فيه إرسال/مزامنة شغّالة (ولا بتوقّف المزامنة)
+let reportInProgress = false;
 
 // حالة كل محادثة محفوظة في الذاكرة (تتصفر عند إعادة تشغيل البوت)
 // STATE: 'MENU' | 'AWAITING_COMPLAINT' | 'HANDED_OFF'
@@ -2854,12 +2857,12 @@ async function handleControlCommand(msg) {
         await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
       }
-      if (broadcastInProgress) {
+      if (reportInProgress) {
         await safeReply(msg, "⏳ فيه مهمة تانية شغّالة (إرسال أو مزامنة) - جرّب بعد دقائق.");
         return;
       }
       await safeReply(msg, "⏳ بجيب أرقام المنصة وبجهّز شريحة بطاقة المزارع (حوالي دقيقتين)...");
-      broadcastInProgress = true;
+      reportInProgress = true;
       let summaryText = null;
       let files = null;
       try {
@@ -2895,7 +2898,7 @@ async function handleControlCommand(msg) {
         console.log(`⚠️ [بطاقة المزارع] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّر تجهيز الشريحة: ${err.message}`);
       } finally {
-        broadcastInProgress = false;
+        reportInProgress = false;
       }
       return;
     }
@@ -2954,12 +2957,12 @@ async function handleControlCommand(msg) {
         await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
       }
-      if (broadcastInProgress) {
+      if (reportInProgress) {
         await safeReply(msg, "⏳ فيه مهمة تانية شغّالة (إرسال أو مزامنة) - جرّب بعد دقائق.");
         return;
       }
       await safeReply(msg, "⏳ بجيب طلبات المزارعين من المنصة وبجهّز التقرير (حوالي دقيقتين)...");
-      broadcastInProgress = true;
+      reportInProgress = true;
       try {
         const fr = require("./lib/farmerRequests");
         const raw = await boundedCall("farmer-requests-fetch", () => require("./lib/portalScraper").fetchFarmerRequests(), 4 * 60 * 1000);
@@ -2989,7 +2992,7 @@ async function handleControlCommand(msg) {
         console.log(`⚠️ [طلبات المزارعين] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّر تجهيز التقرير: ${err.message}`);
       } finally {
-        broadcastInProgress = false;
+        reportInProgress = false;
       }
       return;
     }
