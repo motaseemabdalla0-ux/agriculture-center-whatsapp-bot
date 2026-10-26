@@ -975,6 +975,38 @@ function startGitAutoUpdateWatcher() {
   }, GIT_AUTO_UPDATE_INTERVAL_MS);
 }
 
+// تحديث فوري بأمر "حدّث البوت" من واتساب (من غير ما نستنى الفحص الدوري ولا نحتاج جهاز الفهاد): بينتظر لحد 3 دقايق
+// لو فيه إرسال/مزامنة شغّالة، وبعدين نفس مسار التحديث التلقائي (سحب + فحوصات الأمان + إعادة تشغيل). بيرجّع نص الرد
+let manualUpdateRunning = false;
+async function forceGitUpdateNow() {
+  if (manualUpdateRunning) return "⏳ فيه تحديث شغّال بالفعل.";
+  manualUpdateRunning = true;
+  try {
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (broadcastInProgress && Date.now() < deadline) await new Promise((r) => setTimeout(r, 2000));
+    if (broadcastInProgress) return "⏳ فيه مهمة إرسال/مزامنة شغّالة من أكتر من 3 دقايق، ما حدّثتش عشان ما أقطعهاش. جرّب بعد ما تخلص.";
+    const result = await gitAutoUpdate.pullAndVerify();
+    if (result.aborted) {
+      const stageLabel = result.stage === "npm_install" ? `npm install فشل: ${result.error}` : result.stage;
+      return `🚨 وصل كود جديد (${result.fromHash.slice(0, 7)} -> ${result.attemptedHash.slice(0, 7)}) لكن فشل (${stageLabel}) - رجّعت الكود القديم تلقائيًا والبوت مستمر.`;
+    }
+    if (result.updated) {
+      try {
+        fs.writeFileSync(GIT_UPDATE_NOTICE_FILE, JSON.stringify({ fromHash: result.fromHash, toHash: result.toHash, ranInstall: result.ranInstall, at: new Date().toISOString() }), "utf8");
+      } catch (writeErr) {
+        console.log(`⚠️ [تحديث يدوي] فشل حفظ ملف التنبيه: ${writeErr.message}`);
+      }
+      setTimeout(() => gracefulExit(0, "تحديث GitHub بأمر يدوي"), 4000);
+      return `✅ اتحدّث (${result.fromHash.slice(0, 7)} -> ${result.toHash.slice(0, 7)}) ونجحت كل الفحوصات. البوت هيعيد تشغيل نفسه خلال ثواني ويرجع خلال دقيقة - اكتب "نسخة البوت" للتأكد.`;
+    }
+    return "ℹ️ الكود محدّث بالفعل، مفيش جديد على GitHub.";
+  } catch (err) {
+    return `⚠️ تعذّر التحديث: ${err.message}`;
+  } finally {
+    manualUpdateRunning = false;
+  }
+}
+
 // لو البوت رجع يشتغل بسبب تحديث GitHub تلقائي (ملف التنبيه موجود من قبل القفلة)، بنسجّل النجاح
 // في اللوج بس (بطلب من الإدارة - مفيش داعي لرسالة واتساب لكل تحديث ناجح، غير الفشل اللي
 // لسه بيتبعت تنبيه عليه لأنه بيحتاج مراجعة فعلية) ونمسح الملف عشان منعالجوش تاني
@@ -2928,6 +2960,13 @@ async function handleControlCommand(msg) {
         .reverse()
         .map((m, i) => `${i + 1}. ${m.at.slice(11, 19)} | ${m.groupId}\n   المرسل: ${m.author || "؟"}\n   النص: ${m.body}${m.note ? `\n   ${m.note}` : ""}`);
       await safeReply(msg, `📋 آخر رسائل المجموعات اللي وصلت للبوت:\n\n${lines.join("\n\n")}`);
+      return;
+    }
+
+    // "حدّث البوت": تحديث فوري من GitHub (سحب + فحوصات الأمان + إعادة تشغيل) من غير الوصول لجهاز الفهاد
+    if (/^(?:حدّث|حدث|تحديث|حدِّث)\s*(?:ال)?بوت$/i.test(text) || /^update\s*bot$/i.test(text)) {
+      await safeReply(msg, "⏳ بفحص GitHub وبحدّث لو فيه جديد (ممكن ياخد دقايق لأنه بيشغّل فحوصات الأمان)...");
+      await safeReply(msg, await forceGitUpdateNow());
       return;
     }
 
