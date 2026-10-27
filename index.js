@@ -2716,6 +2716,48 @@ async function handleControlCommand(msg) {
       return;
     }
 
+    // تقرير إشعارات إصدار البطاقات: كل بطاقة جاهزة في المنصة + هل وصلها إشعار الإصدار + سبب عدم الإرسال (ملخص + Excel).
+    // قراءة فقط (مفيش إرسال لأي مزارع) - بيستخدم قفل التقارير مش قفل الحملات
+    if (/^تقرير\s*(?:ال)?[اإ]شعارات\s*(?:ال)?(?:بطاقات|اصدار|إصدار)$|^تقرير\s*(?:ال)?[اإ]صدار$/i.test(text)) {
+      if (!portalSync.isConfigured()) {
+        await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      if (reportInProgress) {
+        await safeReply(msg, "⏳ فيه تقرير تاني شغّال - جرّب بعد دقيقة.");
+        return;
+      }
+      reportInProgress = true;
+      try {
+        await safeReply(msg, "⏳ بقرا البطاقات الجاهزة من المنصة وبقارنها بسجل الإرسال (حوالي دقيقتين)...");
+        const rows = await boundedCall("card-notice-report-fetch", () => require("./lib/portalScraper").fetchPrintedCards(1000), 6 * 60 * 1000);
+        const decisions = new Map();
+        require("./lib/auditLog").readRecent().forEach((e) => {
+          if (e.campaignType === "card_pickup" && e.normalizedPhone) decisions.set(e.normalizedPhone, e);
+        });
+        const sentDates = new Map();
+        sendLog.getAllByLabel("استلام البطاقة").forEach((e) => {
+          const p = normalizeSaudiPhone(e.phone);
+          if (p) sentDates.set(p, e.date);
+        });
+        const cnr = require("./lib/cardNoticeReport");
+        const report = cnr.buildCardNoticeReport(rows, {
+          hasBeenSent: (phone) => sentTracker.hasBeenSent("card_pickup", phone),
+          lastDecision: (phone) => decisions.get(phone) || null,
+          sentDate: (phone) => sentDates.get(phone) || "",
+        });
+        await safeReply(msg, cnr.formatCardNoticeMessage(report));
+        const media = new MessageMedia("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (await cnr.buildCardNoticeBuffer(report)).toString("base64"), cnr.cardNoticeFileName(report.now));
+        await boundedCall("card-notice-report-file", () => client.sendMessage(msg.from, media, { sendMediaAsDocument: true }), 60000);
+      } catch (err) {
+        console.log(`⚠️ [تقرير إشعارات البطاقات] فشل: ${err.message}`);
+        await safeReply(msg, `⚠️ تعذّر تجهيز التقرير: ${err.message}`);
+      } finally {
+        reportInProgress = false;
+      }
+      return;
+    }
+
     if (/^الحصة$/i.test(text)) {
       if (!portalSync.isConfigured()) {
         await msg.reply("⚠️ نظام البطاقات مش متظبّط أصلًا.");
