@@ -15,6 +15,7 @@ const rows = [
   { name: "عمر", phone: "966500000007", nationalId: "1000000007", formNumber: "107" }, // حد الإرسال
   { name: "ابن أحمد", phone: "966500000001", nationalId: "1000000008", formNumber: "108" }, // نفس جوال أحمد
   { name: "أحمد", phone: "966500000001", nationalId: "1000000001", formNumber: "101" }, // تكرار لنفس الطلب
+  { name: "قديم", phone: "966500000009", nationalId: "1000000009", formNumber: "109" }, // قبل تاريخ البدء
 ];
 const sent = new Set(["966500000001"]);
 const decisions = {
@@ -22,11 +23,12 @@ const decisions = {
   966500000003: { decision: "FAILED", reason: "not_on_whatsapp" },
   966500000007: { decision: "RATE_LIMITED", reason: "hourly" },
 };
-const ctx = { hasBeenSent: (p) => sent.has(p), lastDecision: (p) => decisions[p] || null, sentDate: (p) => (p === "966500000001" ? "2026-10-20" : "") };
+const ctx = { beforeStart: (row) => row.name === "قديم", hasBeenSent: (p) => sent.has(p), lastDecision: (p) => decisions[p] || null, sentDate: (p) => (p === "966500000001" ? "2026-10-20" : "") };
 const rep = r.buildCardNoticeReport(rows, ctx, new Date("2026-10-27T08:00:00Z"));
-assert.strictEqual(rep.total, 8, "التكرار اتشال");
+assert.strictEqual(rep.total, 9, "التكرار اتشال");
 assert.strictEqual(rep.sent, 2, "أحمد + ابنه (نفس الجوال)");
-assert.strictEqual(rep.notSent, 6);
+assert.strictEqual(rep.notSent, 7);
+assert.ok(/بطاقة قديمة/.test(rep.items.find((i) => i.name === "قديم").reason));
 const by = (n) => rep.items.find((i) => i.name === n);
 assert.strictEqual(by("أحمد").sentAt, "2026-10-20");
 assert.ok(/مرة واحدة لكل رقم/.test(by("أحمد").note) && /3 بطاقات/.test(by("أحمد").note), "ملاحظة الرقم المشترك");
@@ -34,10 +36,10 @@ assert.ok(/غير عربي/.test(by("Mohammed").reason));
 assert.ok(/غير مسجّل على واتساب/.test(by("سالم").reason));
 assert.ok(/مفيش رقم جوال/.test(by("خالد").reason));
 assert.ok(/غير صحيح/.test(by("فهد").reason));
-assert.ok(/لم تتم محاولة الإرسال/.test(by("ناصر").reason));
+assert.ok(/لا يوجد أي أثر للإرسال/.test(by("ناصر").reason));
 assert.ok(/طابور الإرسال/.test(by("عمر").reason));
 const msg = r.formatCardNoticeMessage(rep);
-assert.ok(/وصلهم إشعار الإصدار: 2/.test(msg) && /لم يصلهم: 6/.test(msg) && /أسباب عدم الإرسال/.test(msg) && /Mohammed/.test(msg));
+assert.ok(/وصلهم إشعار الإصدار: 2/.test(msg) && /لم يصلهم: 7/.test(msg) && /أسباب عدم الإرسال/.test(msg) && /Mohammed/.test(msg));
 (async () => {
   const buf = await r.buildCardNoticeBuffer(rep);
   const tmp = path.join(os.tmpdir(), "cnr-test.xlsx");
@@ -46,8 +48,8 @@ assert.ok(/وصلهم إشعار الإصدار: 2/.test(msg) && /لم يصله�
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(tmp);
   assert.deepStrictEqual(wb.worksheets.map((w) => w.name), ["الملخص", "لم يُرسل (مع السبب)", "تم الإرسال", "كل البطاقات"]);
-  assert.strictEqual(wb.getWorksheet("لم يُرسل (مع السبب)").rowCount, 7);
-  assert.strictEqual(wb.getWorksheet("كل البطاقات").rowCount, 9);
+  assert.strictEqual(wb.getWorksheet("لم يُرسل (مع السبب)").rowCount, 8);
+  assert.strictEqual(wb.getWorksheet("كل البطاقات").rowCount, 10);
   fs.unlinkSync(tmp);
   assert.ok(/تقرير إشعارات إصدار البطاقات - 2026-10-27/.test(r.cardNoticeFileName(new Date("2026-10-27T08:00:00Z"))));
   // قائمة كاملة فاضية = رسالة نجاح

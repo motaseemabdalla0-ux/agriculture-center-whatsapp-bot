@@ -2732,7 +2732,7 @@ async function handleControlCommand(msg) {
         await safeReply(msg, "⏳ بقرا البطاقات الجاهزة من المنصة وبقارنها بسجل الإرسال (حوالي دقيقتين)...");
         const rows = await boundedCall("card-notice-report-fetch", () => require("./lib/portalScraper").fetchPrintedCards(1000), 6 * 60 * 1000);
         const decisions = new Map();
-        require("./lib/auditLog").readRecent().forEach((e) => {
+        require("./lib/auditLog").readRecent(60 * 1024 * 1024).forEach((e) => {
           if (e.campaignType === "card_pickup" && e.normalizedPhone) decisions.set(e.normalizedPhone, e);
         });
         const sentDates = new Map();
@@ -2745,6 +2745,10 @@ async function handleControlCommand(msg) {
           hasBeenSent: (phone) => sentTracker.hasBeenSent("card_pickup", phone),
           lastDecision: (phone) => decisions.get(phone) || null,
           sentDate: (phone) => sentDates.get(phone) || "",
+          beforeStart: (row) => {
+            const d = require("./lib/portalScraper").parseUsSlashDate(row.submittedDate);
+            return !!d && d < portalSync.PORTAL_START_DATE;
+          },
         });
         await safeReply(msg, cnr.formatCardNoticeMessage(report));
         const media = new MessageMedia("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", (await cnr.buildCardNoticeBuffer(report)).toString("base64"), cnr.cardNoticeFileName(report.now));
