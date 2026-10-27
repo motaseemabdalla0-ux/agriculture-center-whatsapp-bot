@@ -562,7 +562,7 @@ async function sendRegistrationStatusBroadcast() {
 }
 
 async function sendCardPickupBroadcast() {
-  await runPersonalizedBroadcast(client, {
+  return runPersonalizedBroadcast(client, {
     csvPath: CARD_PICKUP_CSV,
     columns: ["name", "phone"],
     template: getCfgText("CARD_PICKUP_TEMPLATE"),
@@ -2758,6 +2758,72 @@ async function handleControlCommand(msg) {
         await safeReply(msg, `⚠️ تعذّر تجهيز التقرير: ${err.message}`);
       } finally {
         reportInProgress = false;
+      }
+      return;
+    }
+
+    // إعادة إرسال إشعار الإصدار للمتأخرين: بيراجع كل البطاقات الجاهزة في المنصة، واللي ما وصلهاش إشعار (ومنطقي
+    // يتعاد معاها: لم تتم المحاولة / فشل) بيبعتلها بنفس نص إشعار الاستلام، بفاصل 20-45 ثانية بين كل رسالة (حماية الرقم)،
+    // وبحد أقصى 40 في الأمر الواحد (أو الرقم اللي تكتبه بعد الأمر، لحد 100). الباقي بيتعاد بتكرار الأمر.
+    const resendMatch = text.match(/^ارسل\s*(?:ال)?[اإ]شعارات\s*(?:ال)?(?:بطاقات|اصدار|إصدار)\s*(?:لل)?(?:متأخرين|المتأخرين|ناقصين|الباقين)(?:\s+(\d{1,3}))?$/i);
+    if (resendMatch) {
+      if (!portalSync.isConfigured()) {
+        await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
+        return;
+      }
+      if (broadcastInProgress) {
+        await safeReply(msg, "⏳ فيه مهمة إرسال أو مزامنة شغّالة - جرّب بعد ما تخلص (الإرسال بدفعات، ممكن ياخد وقت).");
+        return;
+      }
+      const cap = Math.min(100, Math.max(1, parseInt(resendMatch[1] || "40", 10)));
+      broadcastInProgress = true;
+      try {
+        await safeReply(msg, "⏳ بقرا البطاقات الجاهزة من المنصة وبراجع مين ما وصلهوش الإشعار (حوالي دقيقتين)...");
+        const rows = await boundedCall("card-resend-fetch", () => require("./lib/portalScraper").fetchPrintedCards(1000), 10 * 60 * 1000);
+        const decisions = new Map();
+        require("./lib/auditLog").readRecent(60 * 1024 * 1024).forEach((e) => {
+          if (e.campaignType === "card_pickup" && e.normalizedPhone) decisions.set(e.normalizedPhone, e);
+        });
+        const cnr = require("./lib/cardNoticeReport");
+        const report = cnr.buildCardNoticeReport(rows, {
+          hasBeenSent: (phone) => sentTracker.hasBeenSent("card_pickup", phone),
+          lastDecision: (phone) => decisions.get(phone) || null,
+          sentDate: () => "",
+          beforeStart: (row) => {
+            const d = require("./lib/portalScraper").parseUsSlashDate(row.submittedDate);
+            return !!d && d < portalSync.PORTAL_START_DATE;
+          },
+        });
+        const pick = cnr.selectResendCandidates(report, { cap, isArabic: isArabicName });
+        if (pick.toSend.length === 0) {
+          await safeReply(msg, `ℹ️ مفيش بطاقات محتاجة إعادة إرسال الآن.\n${report.sent} من ${report.total} وصلهم الإشعار.${pick.nonArabic.length ? `\n⚠️ ${pick.nonArabic.length} بطاقة اسمها غير عربي في المنصة (ممنوع الإرسال بالاسم الإنجليزي).` : ""}\nللتفاصيل: تقرير اشعارات البطاقات`);
+          return;
+        }
+        const firstWords = (n) => String(n || "").trim().split(/\s+/).slice(0, 3).join(" ");
+        const { farmerRowsToCsvText } = require("./lib/fileIngest");
+        fs.writeFileSync(CARD_PICKUP_CSV, farmerRowsToCsvText(pick.toSend.map((i) => ({ name: firstWords(i.name), phone: i.phone, request_number: "" })), false), "utf8");
+        await safeReply(msg, `🚀 بدأت إعادة إرسال إشعار الإصدار لـ ${pick.toSend.length} مزارع (من ${report.notSent} ما وصلهم). بفاصل 20-45 ثانية بين كل رسالة، فالإرسال ممكن ياخد حوالي ${Math.ceil((pick.toSend.length * 32) / 60)} دقيقة. هبعتلك النتيجة لما يخلص.`);
+        const summary = (await sendCardPickupBroadcast()) || {};
+        const lines = [
+          "📬 انتهت إعادة إرسال إشعار الإصدار",
+          `✅ اتبعت: ${summary.sent || 0}`,
+          `⏭️ اتجاهل (اتبعتلهم قبل كده): ${summary.skippedDuplicate || 0}`,
+          `❌ فشل / غير مسجّل على واتساب: ${(summary.failed || 0) + (summary.notOnWhatsapp || 0)}`,
+          `🚫 ممنوع (اسم غير عربي): ${summary.blockedNonArabicName || 0}`,
+        ];
+        if (summary.invalidPhone) lines.push(`📵 رقم غير صالح: ${summary.invalidPhone}`);
+        if (summary.deliveryUncertain) lines.push(`⚠️ إرسال غير مؤكّد (راجع السجل): ${summary.deliveryUncertain}`);
+        if (pick.deferred) lines.push("", `⏳ باقي ${pick.deferred} لم يدخلوا هذه الدفعة (حد ${cap}). اكتب نفس الأمر تاني لإرسالهم.`);
+        if (pick.nonArabic.length) lines.push("", `⚠️ ${pick.nonArabic.length} بطاقة اسمها غير عربي في المنصة، ما اتبعتلهمش (ممنوع الإرسال بالاسم الإنجليزي) - صحّح الاسم في المنصة.`);
+        const ex = Object.entries(pick.excluded);
+        if (ex.length) lines.push("", "ما دخلوش إعادة الإرسال لأن السبب لا ينفع معه إعادة:", ...ex.map(([reason, n]) => `• ${reason}: ${n}`));
+        lines.push("", "للتفاصيل الكاملة: تقرير اشعارات البطاقات");
+        await safeReply(msg, lines.join("\n"));
+      } catch (err) {
+        console.log(`⚠️ [إعادة إرسال الإشعارات] فشل: ${err.message}`);
+        await safeReply(msg, `⚠️ تعذّرت إعادة الإرسال: ${err.message}`);
+      } finally {
+        broadcastInProgress = false;
       }
       return;
     }

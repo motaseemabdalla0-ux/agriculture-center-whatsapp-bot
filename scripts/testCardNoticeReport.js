@@ -55,5 +55,27 @@ assert.ok(/وصلهم إشعار الإصدار: 2/.test(msg) && /لم يصله�
   // قائمة كاملة فاضية = رسالة نجاح
   const empty = r.buildCardNoticeReport([{ name: "أحمد", phone: "966500000001", formNumber: "1" }], ctx);
   assert.ok(/كل البطاقات الجاهزة وصلها/.test(r.formatCardNoticeMessage(empty)));
+  // اختيار المتأخرين لإعادة الإرسال: بس "لم تتم المحاولة"/"فشل" بأسماء عربية، والباقي مستبعد بسببه، وحد أقصى
+  const more = r.buildCardNoticeReport([
+    { name: "عمر", phone: "966500000011", formNumber: "11" }, // بدون أثر -> يتبعت
+    { name: "Omar", phone: "966500000012", formNumber: "12" }, // بدون أثر لكن اسم إنجليزي
+    { name: "سعد", phone: "966500000013", formNumber: "13" }, // فشل عام -> يتبعت
+    { name: "علي", phone: "966500000014", formNumber: "14" }, // مش على واتساب -> مستبعد
+    { name: "حسن", phone: "966500000015", formNumber: "15" }, // غير مؤكد -> مستبعد
+    { name: "قديم", phone: "966500000016", formNumber: "16" }, // قديمة -> مستبعد
+    { name: "ماجد", phone: "966500000017", formNumber: "17" }, // بدون أثر -> يتبعت (لكن فوق الحد)
+  ], {
+    beforeStart: (row) => row.name === "قديم",
+    hasBeenSent: () => false,
+    sentDate: () => "",
+    lastDecision: (p) => ({ 966500000013: { decision: "FAILED", reason: "timeout" }, 966500000014: { decision: "FAILED", reason: "not_on_whatsapp" }, 966500000015: { decision: "DELIVERY_UNCERTAIN", reason: "x" } })[p] || null,
+  });
+  const pick = r.selectResendCandidates(more, { cap: 2, isArabic: (n) => /[؀-ۿ]/.test(n) });
+  assert.deepStrictEqual(pick.toSend.map((i) => i.name), ["عمر", "سعد"], "الأولوية بترتيب الصفوف وبحد 2");
+  assert.strictEqual(pick.deferred, 1, "ماجد فوق الحد");
+  assert.deepStrictEqual(pick.nonArabic.map((i) => i.name), ["Omar"]);
+  const excludedText = Object.keys(pick.excluded).join("|");
+  assert.ok(/غير مسجّل على واتساب/.test(excludedText) && /غير مؤكّد/.test(excludedText) && /بطاقة قديمة/.test(excludedText), "المستبعدون بأسبابهم");
+  assert.ok(!pick.toSend.some((i) => ["علي", "حسن", "قديم"].includes(i.name)), "ما بيتعادش إرسال لغير القابلين");
   console.log("✅ كل الفحوصات نجحت");
 })().catch((e) => { console.error("❌", e.message); process.exit(1); });
