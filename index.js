@@ -239,7 +239,10 @@ let broadcastInProgress = false;
 // قفل منفصل لتقارير القراءة فقط (بطاقة المزارع / طلبات المزارعين): بتقرا من المنصة وبتبعت للي طلبها بس - مالها علاقة
 // بحملات الإرسال، فمابتتأخرش ولا بتتمنع لو فيه إرسال/مزامنة شغّالة (ولا بتوقّف المزامنة)
 let reportInProgress = false;
-let resendQueued = false; // طلب "ارسل اشعارات البطاقات للمتأخرين" في الانتظار لحد ما القفل يتفك
+// إعادة إرسال إشعارات البطاقات للمتأخرين بتشتغل فورًا (من غير ما تستنى مزامنة المنصة) بقفل خاص بيها؛ التحديث التلقائي بيستناها تخلص.
+// منع التكرار (نفس الرقم مرتين) محمي في safeFarmerSend حتى لو المزامنة بعتت لنفس الرقم في نفس الوقت.
+let resendRunning = false;
+const RESEND_CSV = path.join(__dirname, "card_pickup_resend.csv");
 
 // حالة كل محادثة محفوظة في الذاكرة (تتصفر عند إعادة تشغيل البوت)
 // STATE: 'MENU' | 'AWAITING_COMPLAINT' | 'HANDED_OFF'
@@ -562,12 +565,12 @@ async function sendRegistrationStatusBroadcast() {
   });
 }
 
-async function sendCardPickupBroadcast() {
+async function sendCardPickupBroadcast(csvPath = CARD_PICKUP_CSV, logFileName = "card-pickup-log.txt") {
   return runPersonalizedBroadcast(client, {
-    csvPath: CARD_PICKUP_CSV,
+    csvPath,
     columns: ["name", "phone"],
     template: getCfgText("CARD_PICKUP_TEMPLATE"),
-    logFile: path.join(__dirname, "card-pickup-log.txt"),
+    logFile: path.join(__dirname, logFileName),
     logLabel: "استلام البطاقة",
     campaignType: "card_pickup",
     messageSource: "SYSTEM_NOTIFICATION",
@@ -923,19 +926,6 @@ function busyDescription() {
   return `مهمة "${busyLabel}" (شغّالة من ${Math.max(1, Math.round((Date.now() - busySince) / 60000))} دقيقة)`;
 }
 
-// بينتظر لحد ما قفل الإرسال/المزامنة يتفك، وبيمسكه فورًا في نفس اللحظة (من غير ما حد تاني يلحقه). false لو عدّى الوقت
-async function waitForIdleAndLock(maxMs) {
-  const deadline = Date.now() + maxMs;
-  while (Date.now() < deadline) {
-    if (!broadcastInProgress) {
-      broadcastInProgress = true;
-      return true;
-    }
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  return false;
-}
-
 async function runExclusive(label, fn) {
   if (broadcastInProgress) return false;
   broadcastInProgress = true;
@@ -965,7 +955,7 @@ function startGitAutoUpdateWatcher() {
   if (gitWatcherStarted) return;
   gitWatcherStarted = true;
   setInterval(async () => {
-    if (broadcastInProgress) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
+    if (broadcastInProgress || resendRunning) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
     try {
       const result = await gitAutoUpdate.pullAndVerify();
       if (result.aborted) {
@@ -1009,8 +999,8 @@ async function forceGitUpdateNow() {
   manualUpdateRunning = true;
   try {
     const deadline = Date.now() + 3 * 60 * 1000;
-    while (broadcastInProgress && Date.now() < deadline) await new Promise((r) => setTimeout(r, 2000));
-    if (broadcastInProgress) return "⏳ فيه مهمة إرسال/مزامنة شغّالة من أكتر من 3 دقايق، ما حدّثتش عشان ما أقطعهاش. جرّب بعد ما تخلص.";
+    while ((broadcastInProgress || resendRunning) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 2000));
+    if (broadcastInProgress || resendRunning) return "⏳ فيه مهمة إرسال/مزامنة شغّالة من أكتر من 3 دقايق، ما حدّثتش عشان ما أقطعهاش. جرّب بعد ما تخلص.";
     const result = await gitAutoUpdate.pullAndVerify();
     if (result.aborted) {
       const stageLabel = result.stage === "npm_install" ? `npm install فشل: ${result.error}` : result.stage;
@@ -2803,26 +2793,12 @@ async function handleControlCommand(msg) {
         await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
       }
-      if (resendQueued) {
-        await safeReply(msg, "⏳ طلب إعادة الإرسال السابق لسه في الانتظار وهيبدأ أول ما المهمة الشغّالة تخلص - مش لازم تكرر الأمر.");
+      if (resendRunning) {
+        await safeReply(msg, "⏳ إعادة الإرسال شغّالة بالفعل - استنى لحد ما تصلك رسالة الانتهاء.");
         return;
       }
       const cap = Math.min(100, Math.max(1, parseInt(resendMatch[1] || "40", 10)));
-      // مزامنة المنصة بتاخد وقت طويل (قراءة كل البطاقات + إرسال + فحص التسليم) - بدل ما نرفض الأمر، بنحطه في الانتظار
-      // وينفّذ تلقائيًا أول ما القفل يتفك (حتى ساعة)، وبنبلّغك لما يبدأ
-      if (broadcastInProgress) {
-        resendQueued = true;
-        await safeReply(msg, `⏳ فيه ${busyDescription()} شغّالة. حطّيت طلبك في الانتظار، وهيبدأ تلقائيًا أول ما تخلص (حتى ساعة) وهبعتلك رسالة وقتها. مش لازم تكرر الأمر.`);
-        const got = await waitForIdleAndLock(60 * 60 * 1000);
-        resendQueued = false;
-        if (!got) {
-          await safeReply(msg, "⚠️ المهمة الشغّالة طوّلت أكتر من ساعة فما بدأتش إعادة الإرسال. جرّب الأمر تاني، أو راجع البوت لو المهمة عالقة.");
-          return;
-        }
-      }
-      broadcastInProgress = true;
-      busyLabel = "إعادة إرسال إشعارات البطاقات";
-      busySince = Date.now();
+      resendRunning = true; // بتشتغل فورًا من غير انتظار مزامنة المنصة
       try {
         await safeReply(msg, "⏳ بقرا البطاقات الجاهزة من المنصة وبراجع مين ما وصلهوش الإشعار (حوالي دقيقتين)...");
         const rows = await boundedCall("card-resend-fetch", () => require("./lib/portalScraper").fetchPrintedCards(1000), 10 * 60 * 1000);
@@ -2847,9 +2823,9 @@ async function handleControlCommand(msg) {
         }
         const firstWords = (n) => String(n || "").trim().split(/\s+/).slice(0, 3).join(" ");
         const { farmerRowsToCsvText } = require("./lib/fileIngest");
-        fs.writeFileSync(CARD_PICKUP_CSV, farmerRowsToCsvText(pick.toSend.map((i) => ({ name: firstWords(i.name), phone: i.phone, request_number: "" })), false), "utf8");
+        fs.writeFileSync(RESEND_CSV, farmerRowsToCsvText(pick.toSend.map((i) => ({ name: firstWords(i.name), phone: i.phone, request_number: "" })), false), "utf8");
         await safeReply(msg, `🚀 بدأت إعادة إرسال إشعار الإصدار لـ ${pick.toSend.length} مزارع (من ${report.notSent} ما وصلهم). بفاصل 20-45 ثانية بين كل رسالة، فالإرسال ممكن ياخد حوالي ${Math.ceil((pick.toSend.length * 32) / 60)} دقيقة. هبعتلك النتيجة لما يخلص.`);
-        const summary = (await sendCardPickupBroadcast()) || {};
+        const summary = (await sendCardPickupBroadcast(RESEND_CSV, "card-pickup-resend-log.txt")) || {};
         const lines = [
           "📬 انتهت إعادة إرسال إشعار الإصدار",
           `✅ اتبعت: ${summary.sent || 0}`,
@@ -2869,8 +2845,7 @@ async function handleControlCommand(msg) {
         console.log(`⚠️ [إعادة إرسال الإشعارات] فشل: ${err.message}`);
         await safeReply(msg, `⚠️ تعذّرت إعادة الإرسال: ${err.message}`);
       } finally {
-        broadcastInProgress = false;
-        busyLabel = null;
+        resendRunning = false;
       }
       return;
     }
