@@ -239,6 +239,7 @@ let broadcastInProgress = false;
 // قفل منفصل لتقارير القراءة فقط (بطاقة المزارع / طلبات المزارعين): بتقرا من المنصة وبتبعت للي طلبها بس - مالها علاقة
 // بحملات الإرسال، فمابتتأخرش ولا بتتمنع لو فيه إرسال/مزامنة شغّالة (ولا بتوقّف المزامنة)
 let reportInProgress = false;
+let resendQueued = false; // طلب "ارسل اشعارات البطاقات للمتأخرين" في الانتظار لحد ما القفل يتفك
 
 // حالة كل محادثة محفوظة في الذاكرة (تتصفر عند إعادة تشغيل البوت)
 // STATE: 'MENU' | 'AWAITING_COMPLAINT' | 'HANDED_OFF'
@@ -913,15 +914,40 @@ async function reconcileDeliveriesWithPortal() {
 }
 
 // نفّذ مهمة بث (بث عادي / حالة تسجيل / استلام بطاقة) مع قفل عشان منشغلش أكتر من مهمة في نفس الوقت
+// اسم المهمة الشغّالة ووقت بدايتها (للرسائل الواضحة "شغّالة من X دقيقة") - بتتسجّل بس للمهام اللي بتعدّي من runExclusive
+let busyLabel = null;
+let busySince = 0;
+function busyDescription() {
+  if (!broadcastInProgress) return "";
+  if (!busyLabel) return "مهمة إرسال أو مزامنة";
+  return `مهمة "${busyLabel}" (شغّالة من ${Math.max(1, Math.round((Date.now() - busySince) / 60000))} دقيقة)`;
+}
+
+// بينتظر لحد ما قفل الإرسال/المزامنة يتفك، وبيمسكه فورًا في نفس اللحظة (من غير ما حد تاني يلحقه). false لو عدّى الوقت
+async function waitForIdleAndLock(maxMs) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (!broadcastInProgress) {
+      broadcastInProgress = true;
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  return false;
+}
+
 async function runExclusive(label, fn) {
   if (broadcastInProgress) return false;
   broadcastInProgress = true;
+  busyLabel = label;
+  busySince = Date.now();
   try {
     await fn();
   } catch (err) {
     console.log(`❌ [${label}] حصل خطأ: ${err.message}`);
   } finally {
     broadcastInProgress = false;
+    busyLabel = null;
   }
   return true;
 }
@@ -2777,12 +2803,26 @@ async function handleControlCommand(msg) {
         await safeReply(msg, "⚠️ نظام البطاقات مش متظبّط أصلًا.");
         return;
       }
-      if (broadcastInProgress) {
-        await safeReply(msg, "⏳ فيه مهمة إرسال أو مزامنة شغّالة - جرّب بعد ما تخلص (الإرسال بدفعات، ممكن ياخد وقت).");
+      if (resendQueued) {
+        await safeReply(msg, "⏳ طلب إعادة الإرسال السابق لسه في الانتظار وهيبدأ أول ما المهمة الشغّالة تخلص - مش لازم تكرر الأمر.");
         return;
       }
       const cap = Math.min(100, Math.max(1, parseInt(resendMatch[1] || "40", 10)));
+      // مزامنة المنصة بتاخد وقت طويل (قراءة كل البطاقات + إرسال + فحص التسليم) - بدل ما نرفض الأمر، بنحطه في الانتظار
+      // وينفّذ تلقائيًا أول ما القفل يتفك (حتى ساعة)، وبنبلّغك لما يبدأ
+      if (broadcastInProgress) {
+        resendQueued = true;
+        await safeReply(msg, `⏳ فيه ${busyDescription()} شغّالة. حطّيت طلبك في الانتظار، وهيبدأ تلقائيًا أول ما تخلص (حتى ساعة) وهبعتلك رسالة وقتها. مش لازم تكرر الأمر.`);
+        const got = await waitForIdleAndLock(60 * 60 * 1000);
+        resendQueued = false;
+        if (!got) {
+          await safeReply(msg, "⚠️ المهمة الشغّالة طوّلت أكتر من ساعة فما بدأتش إعادة الإرسال. جرّب الأمر تاني، أو راجع البوت لو المهمة عالقة.");
+          return;
+        }
+      }
       broadcastInProgress = true;
+      busyLabel = "إعادة إرسال إشعارات البطاقات";
+      busySince = Date.now();
       try {
         await safeReply(msg, "⏳ بقرا البطاقات الجاهزة من المنصة وبراجع مين ما وصلهوش الإشعار (حوالي دقيقتين)...");
         const rows = await boundedCall("card-resend-fetch", () => require("./lib/portalScraper").fetchPrintedCards(1000), 10 * 60 * 1000);
@@ -2830,6 +2870,7 @@ async function handleControlCommand(msg) {
         await safeReply(msg, `⚠️ تعذّرت إعادة الإرسال: ${err.message}`);
       } finally {
         broadcastInProgress = false;
+        busyLabel = null;
       }
       return;
     }
