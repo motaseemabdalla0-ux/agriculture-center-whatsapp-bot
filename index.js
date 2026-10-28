@@ -2740,6 +2740,12 @@ async function handleControlCommand(msg) {
           const p = normalizeSaudiPhone(e.phone);
           if (p) sentDates.set(p, e.date);
         });
+        // سجل الإرسال القصير بيقص القديم، فبنكمّل تواريخ الإرسال الناقصة من سجل القرارات (SENT)
+        require("./lib/auditLog").readRecent(60 * 1024 * 1024).forEach((e) => {
+          if (e.campaignType === "card_pickup" && e.decision === "SENT" && e.normalizedPhone && !sentDates.has(e.normalizedPhone)) {
+            sentDates.set(e.normalizedPhone, String(e.timestamp || "").slice(0, 10));
+          }
+        });
         const cnr = require("./lib/cardNoticeReport");
         const report = cnr.buildCardNoticeReport(rows, {
           hasBeenSent: (phone) => sentTracker.hasBeenSent("card_pickup", phone),
