@@ -3045,6 +3045,14 @@ async function handleControlCommand(msg) {
         const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Riyadh" });
         const previous = slide.pickPrevious(slide.loadSnapshots(), dateStr);
         const data = slide.computeSlideData(stats, { dateStr, previous });
+        // تصنيف أنواع المزارع: لو فشلت القراءة أو ما اتطابقتش مع الإجمالي الكرت بيعرض "غير متاحة" بدل رقم غلط
+        try {
+          const ft = await boundedCall("farmer-card-farm-types", () => require("./lib/portalScraper").fetchFarmTypeCounts(), 8 * 60 * 1000);
+          if (ft && ft.failed === 0 && ft.other === 0 && ft.crop + ft.livestock + ft.mixed === data.total) data.farmTypes = ft;
+          else console.log(`⚠️ [بطاقة المزارع] تصنيف الأنواع مش مطابق للإجمالي (${JSON.stringify(ft)}) - الكرت بيظهر غير متاح.`);
+        } catch (err) {
+          console.log(`⚠️ [بطاقة المزارع] تعذّر تصنيف الأنواع: ${err.message}`);
+        }
         files = await boundedCall("farmer-card-render", () => slide.renderSlideFiles(data), 2 * 60 * 1000);
         if (!withSheet) slide.saveSnapshot(slide.computeCounts(platformStats), dateStr); // اللقطة الأسبوعية بأرقام المنصة الصافية بس
         summaryText =

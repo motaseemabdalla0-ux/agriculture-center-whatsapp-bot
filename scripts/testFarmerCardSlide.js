@@ -73,3 +73,16 @@ console.log(`\n🎉 كل اختبارات شريحة بطاقة المزارع �
   assertZ(vz.ok && vz.warnings.some((w) => w.includes("مقبول")), "assumed-zero approved is a warning, not an error");
   console.log("✅ 6: كرت 'مقبول' غير الظاهر (صفر) بيعدّي بتنبيه ومش بيمنع التقرير");
 }
+
+{
+  const { renderSlideHtml } = require("../lib/farmerCardSlideRender");
+  const st = { pendingReview: 21, transferredToLts: 16, onHold: 218, approved: 2, rejected: 8, archived: 3, pendingPrinting: 481, issuingPending: 481, pendingDelivery: 270, delivered: 279, totalInQueue: 1030, assumedZero: [] };
+  const d = s.computeSlideData(st, { dateStr: "2026-11-02", previous: null });
+  assert.ok(/بيانات التصنيف غير متاحة/.test(renderSlideHtml(d)), "بدون بيانات: الكرت يعرض غير متاحة");
+  d.farmTypes = { crop: 421, livestock: 787, mixed: 79 };
+  const h = renderSlideHtml(d);
+  assert.ok(/تصنيف أنواع المزارع/.test(h) && /زراعية/.test(h) && /حيوانية/.test(h) && /مختلطة/.test(h), "كرت التصنيف موجود");
+  assert.ok(!/class="ptotal"|class="sumbox"/.test(h), "الإجمالي العلوي وصندوق اللوحة محذوفان");
+  assert.ok(/إجمالي البطاقات/.test(h), "كرت الإجمالي موجود");
+  console.log("✅ 7: كرت إجمالي البطاقات + تصنيف الأنواع + حذف الإجمالي العلوي");
+}
