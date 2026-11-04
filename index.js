@@ -716,6 +716,7 @@ async function maybeSyncPortal() {
     }
   })();
 
+  if (priorityWaiting > 0) return; // أمر إرسال من الأدمن مستني - المزامنة تتأجّل للدورة الجاية
   const now = Date.now();
   if (now - lastPortalSyncAt < cfgIntervalMinutes * 60 * 1000) return;
   lastPortalSyncAt = now;
@@ -926,6 +927,29 @@ function busyDescription() {
   return `مهمة "${busyLabel}" (شغّالة من ${Math.max(1, Math.round((Date.now() - busySince) / 60000))} دقيقة)`;
 }
 
+// أمر إرسال صريح من الأدمن (تأكيد إرسال / إعادة محاولة) له أولوية على المهام الخلفية: بدل ما يترفض لو فيه مهمة
+// شغّالة، بيستنى لحد ما تفضى (لحد maxWaitMs) وفي الأثناء المهام الخلفية الجديدة (مزامنة المنصة/التحديث التلقائي)
+// بتتأجّل عشان ما تسبقوش. اللي شغّال فعلًا بيكمّل ومبيتقطعش.
+let priorityWaiting = 0;
+async function runExclusivePriority(label, fn, maxWaitMs = 30 * 60 * 1000, onWait) {
+  priorityWaiting++;
+  try {
+    const deadline = Date.now() + maxWaitMs;
+    let notified = false;
+    while (broadcastInProgress && Date.now() < deadline) {
+      if (!notified && onWait) {
+        notified = true;
+        try { await onWait(busyDescription()); } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    if (broadcastInProgress) return false;
+    return await runExclusive(label, fn);
+  } finally {
+    priorityWaiting--;
+  }
+}
+
 async function runExclusive(label, fn) {
   if (broadcastInProgress) return false;
   broadcastInProgress = true;
@@ -955,7 +979,7 @@ function startGitAutoUpdateWatcher() {
   if (gitWatcherStarted) return;
   gitWatcherStarted = true;
   setInterval(async () => {
-    if (broadcastInProgress || resendRunning) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
+    if (broadcastInProgress || resendRunning || priorityWaiting > 0) return; // مانوقفش وسط إرسال حملة شغّالة فعليًا
     try {
       const result = await gitAutoUpdate.pullAndVerify();
       if (result.aborted) {
@@ -2411,11 +2435,11 @@ async function handleControlCommand(msg) {
         return;
       }
       await msg.reply(`🔄 جاري إرسال ${pendingCount} رسالة من الحملة "${campaignId}"...`);
-      const started = await runExclusive("رسائل مخصصة (حملة)", async () => {
+      const started = await runExclusivePriority("رسائل مخصصة (حملة)", async () => {
         const summary = await sendCampaignRows(client, campaignId);
         await msg.reply(formatSummaryText(campaignId, summary));
-      });
-      if (!started) await msg.reply("⚠️ فيه عملية إرسال شغالة بالفعل، استنى تخلص وحاول تاني.");
+      }, undefined, (busy) => msg.reply(`⏳ فيه ${busy || "مهمة أخرى"} شغّالة - الحملة في الانتظار ولها الأولوية، هتبدأ تلقائيًا أول ما تخلص (مش محتاج تعيد الأمر).`));
+      if (!started) await msg.reply("⚠️ المهمة الشغّالة لسه ما خلصتش بعد 30 دقيقة - الحملة محفوظة. لو فضلت كده اعمل إعادة تشغيل للبوت (fix-bot.bat) وأعد أمر التأكيد.");
       return;
     }
 
@@ -2434,11 +2458,11 @@ async function handleControlCommand(msg) {
         return;
       }
       await msg.reply(`🔄 جاري إعادة محاولة ${resetCount} رسالة فاشلة من الحملة "${campaignId}"...`);
-      const started = await runExclusive("رسائل مخصصة (إعادة محاولة)", async () => {
+      const started = await runExclusivePriority("رسائل مخصصة (إعادة محاولة)", async () => {
         const summary = await sendCampaignRows(client, campaignId);
         await msg.reply(formatSummaryText(campaignId, summary));
-      });
-      if (!started) await msg.reply("⚠️ فيه عملية إرسال شغالة بالفعل، استنى تخلص وحاول تاني.");
+      }, undefined, (busy) => msg.reply(`⏳ فيه ${busy || "مهمة أخرى"} شغّالة - إعادة المحاولة في الانتظار ولها الأولوية.`));
+      if (!started) await msg.reply("⚠️ المهمة الشغّالة لسه ما خلصتش بعد 30 دقيقة - الحملة محفوظة. أعد الأمر بعد إعادة تشغيل البوت.");
       return;
     }
 
