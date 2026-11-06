@@ -78,7 +78,7 @@ let timer=null;
 const tabs={overview,texts,library,people,activity};
 
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));b.classList.add("on");go(b.dataset.t)});
-function go(t){clearInterval(timer);timer=null;$("#main").replaceChildren();tabs[t]().catch(e=>$("#main").append(el("p",{},"تعذّر التحميل: "+e.message)))}
+function go(t){if(location.protocol==="file:"){$("#main").replaceChildren(el("div",{class:"card"},el("h2",{},"افتح اللوحة من خادم البوت"),el("p",{},"هذه الصفحة لا تعمل بفتح الملف مباشرة. شغّل البوت (بعد حدّث البوت) ثم افتح من جهازه العنوان: http://127.0.0.1:4020"),el("p",{class:"hint"},"كلمة السر في ملف dashboard_password.txt داخل مجلد البوت.")));return}clearInterval(timer);timer=null;$("#main").replaceChildren();tabs[t]().catch(e=>$("#main").append(el("p",{},"تعذّر التحميل: "+e.message)))}
 
 async function overview(){
   const main=$("#main");
