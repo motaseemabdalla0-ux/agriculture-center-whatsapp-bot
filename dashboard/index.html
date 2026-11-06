@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة تحكم البوت</title>
+<style>
+:root{--bg:#f4f1ea;--card:#fff;--ink:#1d2a25;--mut:#6b7a73;--line:#e3ded2;--g:#2f7d5f;--gd:#123a31;--gold:#c9a45c;--red:#b3402a;--amber:#b7791f;--ok:#1f8f5f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",Tahoma,Arial,sans-serif;font-size:15px;line-height:1.55}
+.app{display:flex;min-height:100vh}
+nav{width:210px;background:var(--gd);color:#f3ead6;padding:18px 12px;position:sticky;top:0;height:100vh;flex-shrink:0}
+nav h1{font-size:17px;margin:4px 8px 18px;color:var(--gold)}
+nav button{display:block;width:100%;text-align:right;background:none;border:0;color:#d9d2bd;padding:10px 12px;border-radius:10px;font:inherit;cursor:pointer;margin-bottom:4px}
+nav button:hover{background:#1b4a3f}
+nav button.on{background:var(--gold);color:var(--gd);font-weight:700}
+main{flex:1;padding:22px 26px;max-width:1100px}
+h2{margin:0 0 14px;font-size:22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.card h3{margin:0 0 6px;font-size:13px;color:var(--mut);font-weight:600}
+.big{font-size:26px;font-weight:800}
+.sub{font-size:13px;color:var(--mut)}
+.pill{display:inline-block;padding:3px 12px;border-radius:99px;font-size:13px;font-weight:700}
+.pill.ok{background:#dff3e8;color:var(--ok)}.pill.warn{background:#fbefd5;color:var(--amber)}.pill.bad{background:#f8dcd5;color:var(--red)}
+.bar{height:9px;background:#ece7da;border-radius:9px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--g)}
+button.b,a.b{background:var(--g);color:#fff;border:0;border-radius:10px;padding:8px 16px;font:inherit;cursor:pointer;font-weight:600}
+button.b.alt{background:#fff;color:var(--ink);border:1px solid var(--line)}button.b.red{background:var(--red)}
+button.b:disabled{opacity:.5;cursor:default}
+input,textarea,select{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+textarea{min-height:170px;resize:vertical;line-height:1.7}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:10px}
+.item>summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+.item>summary::-webkit-details-marker{display:none}
+.item .body{padding:0 16px 16px}
+.tag{font-size:12px;background:#ece7da;border-radius:8px;padding:2px 8px;color:var(--mut)}
+.tag.edit{background:#fbefd5;color:var(--amber)}
+.hint{font-size:13px;color:var(--mut);margin:6px 0}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line);font-size:14px}
+th{background:#efeadd;color:var(--mut);font-weight:600}
+.toast{position:fixed;bottom:20px;left:20px;background:var(--gd);color:#fff;padding:11px 18px;border-radius:12px;opacity:0;transition:.25s;pointer-events:none;max-width:420px}
+.toast.show{opacity:1}.toast.err{background:var(--red)}
+.num{direction:ltr;unicode-bidi:embed;font-family:Consolas,monospace}
+.qr svg{max-width:240px;height:auto;border:1px solid var(--line);border-radius:10px}
+.sec{margin:22px 0 10px;font-size:16px;font-weight:700}
+@media(max-width:760px){.app{flex-direction:column}nav{width:100%;height:auto;position:static;display:flex;gap:4px;overflow-x:auto}nav h1{display:none}nav button{white-space:nowrap;width:auto}main{padding:16px}}
+</style>
+</head>
+<body>
+<div class="app">
+<nav>
+  <h1>🌿 لوحة تحكم البوت</h1>
+  <button data-t="overview" class="on">نظرة عامة</button>
+  <button data-t="texts">رسائل البوت</button>
+  <button data-t="library">مكتبة الرسائل</button>
+  <button data-t="people">الأدمن والموظفون</button>
+  <button data-t="activity">سجل النشاط</button>
+</nav>
+<main id="main"></main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const $=(s,r=document)=>r.querySelector(s);
+function el(tag,attrs={},...kids){const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs)){if(k==="class")e.className=v;else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);else if(v!==false&&v!=null)e.setAttribute(k,v===true?"":v)}for(const c of kids.flat())e.append(c&&c.nodeType?c:document.createTextNode(c==null?"":c));return e}
+function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className="toast show"+(err?" err":"");clearTimeout(toast.h);toast.h=setTimeout(()=>t.className="toast",3200)}
+async function api(path,method="GET",body){
+  const r=await fetch(location.origin+"/api/"+path,{method,headers:{"Content-Type":"application/json","X-Dash":"1"},body:body?JSON.stringify(body):undefined});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.error||"خطأ "+r.status);
+  return j;
+}
+const fmtDur=s=>{const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+" يوم ":"")+(h?h+" ساعة ":"")+m+" دقيقة"};
+const fmtTime=iso=>iso?new Date(iso).toLocaleString("ar-SA-u-ca-gregory-nu-latn",{hour12:true,dateStyle:"short",timeStyle:"short"}):"—";
+const STATE={starting:["جارٍ التشغيل","warn"],qr:["بانتظار مسح رمز QR","warn"],authenticated:["تم التحقق، جارٍ الربط","warn"],ready:["متصل","ok"],disconnected:["غير متصل","bad"],auth_failure:["فشل تسجيل الدخول","bad"]};
+let timer=null;
+const tabs={overview,texts,library,people,activity};
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));b.classList.add("on");go(b.dataset.t)});
+function go(t){clearInterval(timer);timer=null;$("#main").replaceChildren();tabs[t]().catch(e=>$("#main").append(el("p",{},"تعذّر التحميل: "+e.message)))}
+
+async function overview(){
+  const main=$("#main");
+  const draw=async()=>{
+    const s=await api("status");
+    const c=s.connection||{};const st=STATE[c.state]||[c.state,"warn"];
+    const pct=(u,l)=>Math.min(100,Math.round(u/l*100));
+    const box=el("div",{},
+      el("h2",{},"نظرة عامة"),
+      el("div",{class:"grid"},
+        el("div",{class:"card"},el("h3",{},"حالة الاتصال بواتساب"),el("div",{class:"big"},el("span",{class:"pill "+st[1]},st[0])),
+          el("div",{class:"sub"},c.number?"الرقم: ":"" ,c.number?el("span",{class:"num"},c.number):"",c.name?" ("+c.name+")":""),
+          el("div",{class:"sub"},c.state==="ready"?"متصل منذ "+fmtTime(c.readyAt):(c.lastError?"آخر خطأ: "+c.lastError:"آخر تغيّر: "+fmtTime(c.since)))),
+        el("div",{class:"card"},el("h3",{},"مدة تشغيل البوت"),el("div",{class:"big"},fmtDur(s.uptimeSec)),el("div",{class:"sub"},s.busy?"⏳ مشغول: "+s.busy:"✅ لا توجد مهمة شغّالة")),
+        el("div",{class:"card"},el("h3",{},"حد الحملات هذه الساعة"),el("div",{class:"big"},s.rate.hourly.used+" / "+s.rate.hourly.limit),
+          el("div",{class:"bar"},el("i",{style:"width:"+pct(s.rate.hourly.used,s.rate.hourly.limit)+"%"})),el("div",{class:"sub"},"يتجدد: "+fmtTime(s.rate.hourly.resetAt))),
+        el("div",{class:"card"},el("h3",{},"حد الحملات اليوم"),el("div",{class:"big"},s.rate.daily.used+" / "+s.rate.daily.limit),
+          el("div",{class:"bar"},el("i",{style:"width:"+pct(s.rate.daily.used,s.rate.daily.limit)+"%"})),el("div",{class:"sub"},s.rate.paused?"⛔ الإرسال موقوف":"الإرسال مفعّل")),
+        el("div",{class:"card"},el("h3",{},"إشعارات النظام اليوم"),el("div",{class:"big"},s.today?s.today.notifications:"—"),el("div",{class:"sub"},"لا تدخل ضمن حد الحملات")),
+        el("div",{class:"card"},el("h3",{},"النصوص والأشخاص"),el("div",{class:"big"},s.texts.overridden+" نص معدّل"),el("div",{class:"sub"},s.people.admins+" أدمن · "+s.people.editors+" محرر · "+s.people.staff+" موظف"))
+      ));
+    if(c.state==="qr"){
+      const q=await api("qr");
+      if(q.svg){const d=el("div",{class:"card qr",style:"margin-top:14px"},el("h3",{},"امسح الرمز من واتساب ← الأجهزة المرتبطة ← ربط جهاز"));d.insertAdjacentHTML("beforeend",q.svg);box.append(d)}
+    }
+    box.append(el("div",{class:"sec"},"إجراءات"),
+      el("div",{class:"row"},el("button",{class:"b red",onclick:async()=>{if(!confirm("إعادة تشغيل البوت؟ ينقطع الاتصال دقيقة تقريبًا ويعود تلقائيًا."))return;try{await api("restart","POST");toast("جارٍ إعادة التشغيل…")}catch(e){toast(e.message,1)}}},"إعادة تشغيل البوت"),
+      el("span",{class:"hint"},"تُستخدم عند تعليق البوت أو توقف مهمة. يعود تلقائيًا عبر PM2.")));
+    main.replaceChildren(box);
+  };
+  await draw();timer=setInterval(()=>draw().catch(()=>{}),6000);
+}
+
+async function texts(){
+  const list=await api("texts");const main=$("#main");
+  main.append(el("h2",{},"رسائل البوت"),el("p",{class:"hint"},"عدّل أي رسالة يرسلها البوت. التعديل يسري فورًا بلا إعادة تشغيل. المتغيرات مثل {name} تُستبدل تلقائيًا ولا تغيّر أسماءها."));
+  const search=el("input",{placeholder:"ابحث في الرسائل…",style:"margin-bottom:14px"});main.append(search);
+  const holder=el("div");main.append(holder);
+  const groups=[...new Set(list.map(t=>t.group))];
+  const items=[];
+  for(const g of groups){
+    const sec=el("div",{class:"sec"},g);holder.append(sec);
+    for(const t of list.filter(x=>x.group===g)){
+      const ta=el("textarea",{},);ta.value=t.value;
+      const tag=el("span",{class:"tag edit"},"معدّلة");tag.style.display=t.overridden?"":"none";
+      const d=el("details",{class:"item"},el("summary",{},el("b",{},t.label),el("span",{},t.placeholders.map(p=>el("span",{class:"tag",style:"margin-left:4px"},p)),tag)),
+        el("div",{class:"body"},ta,
+          el("div",{class:"hint"},t.placeholders.length?"المتغيرات المسموحة: "+t.placeholders.join(" ")+" (يُفضّل إبقاؤها)":"لا متغيرات في هذه الرسالة"),
+          el("div",{class:"row"},
+            el("button",{class:"b",onclick:async e=>{try{const r=await api("texts/"+t.key,"PUT",{value:ta.value});tag.style.display="";t.overridden=true;toast(r.missing&&r.missing.length?"تم الحفظ — تنبيه: حذفت "+r.missing.join(" "):"تم الحفظ")}catch(er){toast(er.message,1)}}},"حفظ"),
+            el("button",{class:"b alt",onclick:async()=>{if(!confirm("استرجاع النص الأصلي؟"))return;try{await api("texts/"+t.key,"DELETE");ta.value=t.defaultValue;tag.style.display="none";t.overridden=false;toast("تم الاسترجاع")}catch(er){toast(er.message,1)}}},"استرجاع الأصلي"))));
+      items.push({d,sec,hay:(t.label+" "+t.key+" "+t.value).toLowerCase()});holder.append(d);
+    }
+  }
+  search.oninput=()=>{const q=search.value.trim().toLowerCase();items.forEach(i=>i.d.style.display=!q||i.hay.includes(q)?"":"none")};
+}
+
+async function library(){
+  const main=$("#main");
+  main.append(el("h2",{},"مكتبة الرسائل"),el("p",{class:"hint"},"احفظ رسائل جاهزة (إعلانات، تذكيرات…) لنسخها واستخدامها في «رسائل مخصصة». لا تغيّر أي رد تلقائي للبوت."));
+  const title=el("input",{placeholder:"عنوان الرسالة"}),text=el("textarea",{placeholder:"نص الرسالة"});
+  const holder=el("div");
+  const add=el("div",{class:"card",style:"margin-bottom:16px"},el("h3",{},"رسالة جديدة"),title,el("div",{style:"height:8px"}),text,el("div",{style:"height:8px"}),
+    el("button",{class:"b",onclick:async()=>{try{await api("library","POST",{title:title.value,text:text.value});title.value=text.value="";toast("تمت الإضافة");draw()}catch(e){toast(e.message,1)}}},"إضافة"));
+  main.append(add,holder);
+  async function draw(){
+    const items=await api("library");holder.replaceChildren();
+    if(!items.length)holder.append(el("p",{class:"hint"},"لا توجد رسائل محفوظة بعد."));
+    for(const it of items){
+      const t=el("input",{value:it.title}),ta=el("textarea",{});ta.value=it.text;
+      holder.append(el("details",{class:"item"},el("summary",{},el("b",{},it.title),el("span",{class:"hint"},fmtTime(it.updatedAt))),
+        el("div",{class:"body"},t,el("div",{style:"height:8px"}),ta,el("div",{class:"row",style:"margin-top:8px"},
+          el("button",{class:"b",onclick:async()=>{try{await api("library/"+it.id,"PUT",{title:t.value,text:ta.value});toast("تم الحفظ");draw()}catch(e){toast(e.message,1)}}},"حفظ"),
+          el("button",{class:"b alt",onclick:async()=>{try{await navigator.clipboard.writeText(ta.value);toast("تم النسخ")}catch{toast("تعذّر النسخ",1)}}},"نسخ"),
+          el("button",{class:"b red",onclick:async()=>{if(!confirm("حذف هذه الرسالة؟"))return;await api("library/"+it.id,"DELETE");draw()}},"حذف")))));
+    }
+  }
+  await draw();
+}
+
+async function people(){
+  const main=$("#main");
+  main.append(el("h2",{},"الأدمن والموظفون"),el("p",{class:"hint"},"الأرقام تُكتب بأي صيغة (0501234567 أو 966501234567). تُحفظ بصيغة موحّدة وتسري فورًا."));
+  const holder=el("div");main.append(holder);
+  const help={admin:"يستقبل التقارير ويتحكم بالبوت بالأوامر.",editor:"يستخدم أوامر التحكم من رقمه الشخصي.",staff:"يستقبل تحويلات المزارعين خلال ساعات الدوام."};
+  async function draw(){
+    const d=await api("people");holder.replaceChildren();
+    for(const role of["admin","editor","staff"]){
+      const inp=el("input",{placeholder:"مثال: 0501234567",style:"max-width:240px",dir:"ltr"});
+      const card=el("div",{class:"card",style:"margin-bottom:14px"},el("h3",{},d[role].label),el("div",{class:"hint"},help[role]));
+      const nums=d[role].numbers;
+      if(!nums.length)card.append(el("div",{class:"hint"},"لا يوجد أحد."));
+      for(const n of nums)card.append(el("div",{class:"row",style:"padding:5px 0;border-bottom:1px solid var(--line)"},el("span",{class:"num",style:"flex:1"},n),
+        el("button",{class:"b alt",onclick:async()=>{if(!confirm("حذف "+n+"؟"))return;await api("people/"+role+"/"+n,"DELETE");toast("تم الحذف");draw()}},"حذف")));
+      card.append(el("div",{class:"row",style:"margin-top:10px"},inp,el("button",{class:"b",onclick:async()=>{try{const r=await api("people","POST",{role,phone:inp.value});toast(r.added?"تمت الإضافة":"الرقم موجود مسبقًا");draw()}catch(e){toast(e.message,1)}}},"إضافة")));
+      holder.append(card);
+    }
+    if(d.configAdmins.numbers.length)holder.append(el("div",{class:"card"},el("h3",{},d.configAdmins.label),d.configAdmins.numbers.map(n=>el("div",{class:"num"},n))));
+  }
+  await draw();
+}
+
+async function activity(){
+  const main=$("#main");main.append(el("h2",{},"سجل النشاط"),el("p",{class:"hint"},"آخر 40 قرارًا إرسالًا (الأرقام مخفية جزئيًا). يتحدث كل 10 ثوانٍ."));
+  const holder=el("div");main.append(holder);
+  const DEC={SENT:["أُرسلت","ok"],FAILED:["فشلت","bad"],WOULD_SEND:["تجريبي","warn"],RATE_LIMITED:["حد الإرسال","warn"],DUPLICATE:["مكررة","warn"],INVALID_PHONE:["رقم خاطئ","bad"]};
+  const draw=async()=>{
+    const rows=await api("activity");
+    const tb=el("table",{},el("thead",{},el("tr",{},["الوقت","القرار","النوع","الرقم","السبب"].map(h=>el("th",{},h)))),
+      el("tbody",{},rows.map(r=>{const d=DEC[r.decision]||[r.decision,"warn"];return el("tr",{},el("td",{},fmtTime(r.at)),el("td",{},el("span",{class:"pill "+d[1]},d[0])),el("td",{},r.type||r.source||"—"),el("td",{class:"num"},r.phone||"—"),el("td",{},r.reason||"—"))})));
+    holder.replaceChildren(rows.length?tb:el("p",{class:"hint"},"لا يوجد نشاط مسجّل."));
+  };
+  await draw();timer=setInterval(()=>draw().catch(()=>{}),10000);
+}
+go("overview");
+</script>
+</body>
+</html>

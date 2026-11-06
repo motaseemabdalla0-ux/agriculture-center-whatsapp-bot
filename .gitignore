@@ -81,3 +81,6 @@ farmer_card_adjustments.json
 
 card_pickup_resend.csv
 card-pickup-resend-log.txt
+
+message_library.json
+dashboard_password.txt

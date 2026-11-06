@@ -384,6 +384,22 @@ client.on("auth_failure", (msg) => {
   console.log(`🚨 [فشل تسجيل الدخول] ${msg}`);
 });
 
+// حالة الاتصال لعرضها في لوحة التحكم (lib/dashboardServer.js)
+const connState = { state: "starting", since: new Date().toISOString(), readyAt: null, number: null, name: null, lastError: null };
+let lastQr = null;
+function setConn(state, extra = {}) {
+  Object.assign(connState, { state, since: new Date().toISOString() }, extra);
+}
+client.on("qr", (qr) => { lastQr = qr; setConn("qr"); });
+client.on("authenticated", () => { lastQr = null; setConn("authenticated"); });
+client.on("auth_failure", (m) => setConn("auth_failure", { lastError: String(m).slice(0, 160) }));
+client.on("disconnected", (reason) => setConn("disconnected", { lastError: String(reason).slice(0, 160) }));
+client.on("ready", () => {
+  lastQr = null;
+  const info = client.info || {};
+  setConn("ready", { readyAt: new Date().toISOString(), number: info.wid && info.wid.user, name: info.pushname || null, lastError: null });
+});
+
 // حماية: لو "ready" ما وصلتش خلال المهلة دي من بدء التشغيل، يبقى فيه تعليق حقيقي
 // (زي مشكلة تشغيل Chrome) - نقفل العملية بنفسنا عشان PM2 يرجّعها من الصفر، بدل ما تفضل
 // واقفة للأبد من غير أي رد أو أثر (وده بالظبط اللي كان بيحصل قبل الإصلاح ده)
@@ -4263,6 +4279,19 @@ client.on("message_create", async (msg) => {
 
 // التحديث التلقائي من GitHub من أول التشغيل: لو البوت منفصل عن واتساب (محتاج ربط/QR) برضه يسحب أي إصلاح جديد
 startGitAutoUpdateWatcher();
+
+if (process.env.DASHBOARD_ENABLED !== "false") {
+  try {
+    require("./lib/dashboardServer").start({
+      getConnection: () => ({ ...connState }),
+      getBusy: () => busyDescription(),
+      getQr: () => lastQr,
+      restart: () => gracefulExit(1, "إعادة تشغيل من لوحة التحكم"),
+    });
+  } catch (err) {
+    console.log(`⚠️ [لوحة التحكم] تعذّر التشغيل: ${err.message}`);
+  }
+}
 
 console.log("🔌 [بدء] جاري نداء client.initialize() (فتح Chrome والاتصال بواتساب ويب)...");
 client.initialize().catch((err) => {
